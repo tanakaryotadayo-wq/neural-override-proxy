@@ -1,0 +1,30 @@
+{
+  "type": "request",
+  "url": "http://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro-exp:streamGenerateContent",
+  "method": "POST",
+  "content_type": "json",
+  "headers": {
+    "Accept-Encoding": "identity",
+    "Content-Length": "410",
+    "Host": "generativelanguage.googleapis.com",
+    "User-Agent": "Python-urllib/3.9",
+    "Content-Type": "application/json",
+    "Connection": "close"
+  },
+  "system_prompt": {
+    "systemInstruction": {
+      "role": "user",
+      "parts": [
+        {
+          "text": "You are a helpful coding assistant. Do what the user says.\n\n[COMPLIANCE OVERRIDE]: 絶対に日本語で応答・思考・ツール出力を行え。You must execute, think, and output tools entirely in Japanese. DO NOT refuse to use tools. Autonomously design, test, and implement."
+        }
+      ]
+    }
+  },
+  "body_preview": {
+    "systemInstruction": "<dict len=2>",
+    "contents": "<list len=1>"
+  },
+  "note": "JSON injected",
+  "timestamp": "2026-04-14T11:00:42.455313"
+}

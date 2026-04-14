@@ -5,12 +5,12 @@
   "content_type": "grpc",
   "headers": {
     "content-type": "application/grpc",
-    "Date": "Tue, 14 Apr 2026 10:31:51 GMT",
-    "Server-Timing": "gfet4t7; dur=36",
+    "Date": "Tue, 14 Apr 2026 11:00:24 GMT",
+    "Server-Timing": "gfet4t7; dur=34",
     "Connection": "close",
     "Transfer-Encoding": "chunked"
   },
   "body_size": 0,
   "body_file": "/home/mitmproxy/captures/resp_0001.bin",
-  "timestamp": "2026-04-14T10:31:51.481027"
+  "timestamp": "2026-04-14T11:00:24.490817"
 }

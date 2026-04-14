@@ -146,6 +146,21 @@ class NeuralOverrideProxy(BaseHTTPRequestHandler):
             logger.error(f"プロキシエラー: {type(e).__name__}: {e}")
             self._send_error(500, "proxy_error")
 
+    def do_GET(self):
+        """Handle GET requests for health check."""
+        parsed_path = urllib.parse.urlparse(self.path)
+        if parsed_path.path in ('/health', '/healthcheck'):
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            response = {"status": "ok", "service": "neural-override-proxy"}
+            self.wfile.write(json.dumps(response).encode('utf-8'))
+            return
+            
+        self.send_response(405)
+        self.end_headers()
+        self.wfile.write(b'Method Not Allowed')
+
     def do_OPTIONS(self):
         """CORS preflight"""
         self.send_response(200)

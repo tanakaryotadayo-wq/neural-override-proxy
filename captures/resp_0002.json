@@ -1,0 +1,22 @@
+{
+  "type": "response",
+  "url": "http://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro-exp:streamGenerateContent",
+  "status": 403,
+  "content_type": "json",
+  "headers": {
+    "Vary": "X-Origin, Referer, Origin,Accept-Encoding",
+    "Content-Type": "application/json; charset=UTF-8",
+    "Date": "Tue, 14 Apr 2026 11:00:42 GMT",
+    "Server": "scaffolding on HTTPServer2",
+    "X-XSS-Protection": "0",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Content-Type-Options": "nosniff",
+    "Server-Timing": "gfet4t7; dur=46",
+    "Accept-Ranges": "none",
+    "Connection": "close",
+    "Transfer-Encoding": "chunked"
+  },
+  "injected_content": null,
+  "body_preview": "<list len=1>",
+  "timestamp": "2026-04-14T11:00:42.528198"
+}
