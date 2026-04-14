@@ -174,28 +174,48 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
             overflow-x: auto;
         }
 
-        .logs-table {
-            width: 100%;
-            border-collapse: collapse;
+        .log-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .log-item {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+
+        .log-item:hover {
+            background: rgba(255, 255, 255, 0.02);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .log-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .log-task {
+            font-weight: 500;
             font-size: 0.9em;
+            color: var(--text);
+            line-height: 1.3;
         }
 
-        .logs-table th, .logs-table td {
-            padding: 10px 8px;
-            text-align: left;
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-            word-break: break-word;
-        }
-
-        .logs-table th {
-            color: var(--text-muted);
-            text-transform: uppercase;
+        .log-result {
             font-size: 0.8em;
-            letter-spacing: 1px;
-        }
-
-        .logs-table tr:hover {
-            background: rgba(255,255,255,0.02);
+            color: var(--text-muted);
+            background: rgba(0, 0, 0, 0.15);
+            padding: 8px;
+            border-radius: 4px;
+            word-break: break-word;
         }
 
         .badge {
@@ -319,30 +339,21 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
     <div class="logs-container">
         <h3 style="margin: 0 0 20px 0; color: var(--text-muted); letter-spacing: 1px; font-size: 0.9em;">FLEET OPERATIONAL LOGS</h3>
         ${logs.length > 0 ? `
-        <table class="logs-table">
-            <thead>
-                <tr>
-                    <th>Time</th>
-                    <th>Status</th>
-                    <th>Task</th>
-                    <th>Result / Tags</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${logs.map(log => `
-                <tr>
-                    <td style="color: var(--text-muted); font-size: 0.85em;">${new Date(log.timestamp).toLocaleTimeString()}</td>
-                    <td><span class="badge badge-${log.event_type}">${log.event_type}</span></td>
-                    <td style="font-weight: 500;">${log.task || '-'}</td>
-                    <td style="font-size: 0.85em; color: var(--text-muted);">
-                        ${log.result || log.cause || '-'} 
-                        <br/>
-                        ${(log.tags || []).map((t: string) => `<span style="opacity: 0.5; margin-right: 5px;">#${t}</span>`).join('')}
-                    </td>
-                </tr>
-                `).join('')}
-            </tbody>
-        </table>
+        <div class="log-list">
+            ${logs.map(log => `
+            <div class="log-item">
+                <div class="log-header-row">
+                    <span class="badge badge-${log.event_type}">${log.event_type}</span>
+                    <span style="color: var(--text-muted); font-size: 0.8em;">${new Date(log.timestamp).toLocaleTimeString()}</span>
+                </div>
+                <div class="log-task">${log.task || '-'}</div>
+                <div class="log-result">
+                    ${log.result || log.cause || '-'}
+                    ${(log.tags || []).length > 0 ? `<div style="margin-top: 5px; color: var(--primary); opacity: 0.8;">${(log.tags || []).map((t: string) => `#${t}`).join(' ')}</div>` : ''}
+                </div>
+            </div>
+            `).join('')}
+        </div>
         ` : `
         <div style="text-align: center; padding: 40px; color: var(--text-muted);">
             No fleet logs recorded today.
