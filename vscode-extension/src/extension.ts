@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getDashboardHtml } from './dashboard';
+import { getDashboardHtml, getJulesHtml } from './dashboard';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -152,41 +152,44 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ── Commands ────────────────────────────────────────────────────────────
 
-  let dashboardPanel: vscode.WebviewPanel | undefined;
+  let julesPanel: vscode.WebviewPanel | undefined;
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('vortex.openDashboard', () => {
-      if (dashboardPanel) {
-        dashboardPanel.reveal(vscode.ViewColumn.One);
+    vscode.commands.registerCommand('vortex.openJulesDashboard', () => {
+      if (julesPanel) {
+        julesPanel.reveal(vscode.ViewColumn.One);
       } else {
-        dashboardPanel = vscode.window.createWebviewPanel(
-          'vortexDashboard',
-          '🌀 VORTEX Dashboard',
+        julesPanel = vscode.window.createWebviewPanel(
+          'julesDashboard',
+          '🤖 Jules Operations',
           vscode.ViewColumn.One,
           { enableScripts: true }
         );
 
-        const updateWebview = () => {
-          if (!dashboardPanel) return;
-          const status = {
-            preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
-            lastVerdict: lastAuditResult?.verdict || null
-          };
-          dashboardPanel.webview.html = getDashboardHtml(context.extensionUri, FLEET_LOG_DIR, () => status);
+        const updateJulesView = () => {
+          if (!julesPanel) return;
+          julesPanel.webview.html = getJulesHtml("Loading Jules Sessions...", true);
+
+          cp.exec('/opt/homebrew/bin/jules remote list --session', (err, stdout, stderr) => {
+            if (!julesPanel) return;
+            if (err) {
+              julesPanel.webview.html = getJulesHtml(`Error: ${stderr || err.message}`, false);
+            } else {
+              julesPanel.webview.html = getJulesHtml(stdout, false);
+            }
+          });
         };
 
-        updateWebview();
+        updateJulesView();
 
-        dashboardPanel.webview.onDidReceiveMessage((msg) => {
+        julesPanel.webview.onDidReceiveMessage((msg) => {
           if (msg.command === 'refresh') {
-            updateWebview();
-          } else if (msg.command === 'runAudit') {
-            vscode.commands.executeCommand('vortex.runAudit');
+            updateJulesView();
           }
         }, undefined, context.subscriptions);
 
-        dashboardPanel.onDidDispose(() => {
-          dashboardPanel = undefined;
+        julesPanel.onDidDispose(() => {
+          julesPanel = undefined;
         }, null, context.subscriptions);
       }
     }),
@@ -223,7 +226,7 @@ export function activate(context: vscode.ExtensionContext) {
           } else {
             vscode.window.showErrorMessage(`⚠️ VORTEX: ${result.text}`);
           }
-          if (dashboardPanel) dashboardPanel.webview.postMessage({ command: 'refresh' });
+          // The sidebar refreshes automatically via sidebarProvider.refresh() above
         }
       );
     }),

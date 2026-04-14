@@ -35,9 +35,9 @@
     },
     "commands": [
       {
-        "command": "vortex.openDashboard",
-        "title": "VORTEX: Open Dashboard",
-        "icon": "$(dashboard)"
+        "command": "vortex.openJulesDashboard",
+        "title": "VORTEX: Open Jules Dashboard",
+        "icon": "$(robot)"
       },
       {
         "command": "vortex.runAudit",
@@ -76,7 +76,7 @@
       ],
       "view/title": [
         {
-          "command": "vortex.openDashboard",
+          "command": "vortex.openJulesDashboard",
           "when": "view == vortex-sidebar-webview",
           "group": "navigation@1"
         },

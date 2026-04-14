@@ -370,3 +370,142 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
 </body>
 </html>`;
 }
+
+export function getJulesHtml(content: string, isLoading: boolean): string {
+    const lines = content.split('\n');
+    let formattedContent = content;
+    
+    if (!isLoading && content.includes('Description') && content.includes('Status')) {
+        formattedContent = lines.map(line => {
+            if (line.includes('ID') && line.includes('Description')) {
+                return `<div style="color: var(--text-muted); font-size: 0.8em; text-transform: uppercase; letter-spacing: 1px; padding-bottom: 10px; border-bottom: 1px solid var(--glass-border); margin-bottom: 10px;">${line}</div>`;
+            }
+            if (!line.trim()) return '';
+            
+            let styledLine = line
+                .replace(/\bAwa\b/, '<span class="badge badge-warning">Awa</span>')
+                .replace(/\bCom\b/, '<span class="badge badge-success">Com</span>')
+                .replace(/\bIn \b/, '<span class="badge badge-primary">In </span>');
+            return `<div style="margin-bottom: 6px; font-family: monospace; white-space: pre; border-bottom: 1px solid rgba(255,255,255,0.02); padding-bottom: 6px;">${styledLine}</div>`;
+        }).join('');
+    }
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jules Operations</title>
+    <style>
+        :root {
+            --bg: #0f111a;
+            --primary: #00d2ff;
+            --secondary: #3a7bd5;
+            --success: #2ecc71;
+            --warning: #f1c40f;
+            --text: #e2e8f0;
+            --text-muted: #94a3b8;
+            --glass: rgba(30, 33, 48, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 40px;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--glass-border);
+            padding-bottom: 20px;
+        }
+
+        .title {
+            font-size: 2em;
+            background: -webkit-linear-gradient(45deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: bold;
+        }
+
+        .container {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            overflow-x: auto;
+        }
+
+        .badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .badge-success { color: var(--success); border: 1px solid var(--success); background: rgba(46, 204, 113, 0.1); }
+        .badge-warning { color: var(--warning); border: 1px solid var(--warning); background: rgba(241, 196, 15, 0.1); }
+        .badge-primary { color: var(--primary); border: 1px solid var(--primary); background: rgba(0, 210, 255, 0.1); }
+
+        .btn {
+            background: transparent;
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: var(--primary);
+            color: var(--bg);
+            box-shadow: 0 0 15px var(--primary);
+        }
+
+        pre {
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">🤖 Jules Operations</div>
+        <button class="btn" onclick="postMessage('refresh')">🔄 Refresh</button>
+    </div>
+    
+    <div class="container">
+        ${isLoading ? 
+            `<div style="color: var(--primary); text-align: center; padding: 40px; font-size: 1.2em;">
+                <span style="display:inline-block; animation: pulse 1.5s infinite;">Scanning active sessions...</span>
+             </div>
+             <style>@keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }</style>
+            ` 
+            : `<pre>${formattedContent}</pre>`
+        }
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        function postMessage(command) {
+            vscode.postMessage({ command });
+        }
+    </script>
+</body>
+</html>`;
+}
