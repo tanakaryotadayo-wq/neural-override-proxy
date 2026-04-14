@@ -1,0 +1,136 @@
+{
+  "name": "vortex-critic",
+  "displayName": "VORTEX Critic",
+  "description": "DeepSeek-powered Evidence Verification & Audit Pipeline — VORTEX Protocol for AI Output Integrity",
+  "version": "1.0.0",
+  "publisher": "ryota-core",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vortex-sidebar",
+          "title": "VORTEX",
+          "icon": "media/vortex-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vortex-sidebar": [
+        {
+          "id": "vortex-status",
+          "name": "🌀 Status"
+        },
+        {
+          "id": "vortex-logs",
+          "name": "📋 Fleet Logs"
+        },
+        {
+          "id": "vortex-actions",
+          "name": "⚡ Actions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vortex.runAudit",
+        "title": "VORTEX: Run Audit on Active File",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "vortex.runAuditSelection",
+        "title": "VORTEX: Audit Selected Code"
+      },
+      {
+        "command": "vortex.viewLogs",
+        "title": "VORTEX: View Fleet Logs"
+      },
+      {
+        "command": "vortex.clearLogs",
+        "title": "VORTEX: Clear Today's Logs"
+      },
+      {
+        "command": "vortex.refreshSidebar",
+        "title": "VORTEX: Refresh Sidebar",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vortex.switchPreset",
+        "title": "VORTEX: Switch PCC Preset"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "vortex.runAuditSelection",
+          "group": "vortex",
+          "when": "editorHasSelection"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "vortex.refreshSidebar",
+          "when": "view == vortex-status",
+          "group": "navigation"
+        },
+        {
+          "command": "vortex.runAudit",
+          "when": "view == vortex-actions",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "VORTEX Critic",
+      "properties": {
+        "vortex.preset": {
+          "type": "string",
+          "default": "渦",
+          "enum": [
+            "渦",
+            "監",
+            "刃",
+            "探",
+            "極",
+            "均"
+          ],
+          "description": "PCC Preset for DeepSeek critic"
+        },
+        "vortex.criticScript": {
+          "type": "string",
+          "default": "",
+          "description": "Path to vortex-critic.py (auto-detected if empty)"
+        },
+        "vortex.fleetBridge": {
+          "type": "string",
+          "default": "",
+          "description": "Path to fleet_bridge.py (auto-detected if empty)"
+        },
+        "vortex.autoAuditOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically run VORTEX audit on file save"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.7.3"
+  }
+}
