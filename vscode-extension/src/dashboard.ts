@@ -372,22 +372,89 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
 }
 
 export function getJulesHtml(content: string, isLoading: boolean): string {
-    const lines = content.split('\n');
-    let formattedContent = content;
-    
-    if (!isLoading && content.includes('Description') && content.includes('Status')) {
-        formattedContent = lines.map(line => {
-            if (line.includes('ID') && line.includes('Description')) {
-                return `<div style="color: var(--text-muted); font-size: 0.8em; text-transform: uppercase; letter-spacing: 1px; padding-bottom: 10px; border-bottom: 1px solid var(--glass-border); margin-bottom: 10px;">${line}</div>`;
-            }
-            if (!line.trim()) return '';
+    let parsedContentHtml = '';
+
+    if (!isLoading) {
+        const lines = content.split('\\n');
+        
+        interface JulesSession {
+            id: string;
+            description: string;
+            repo: string;
+            lastActive: string;
+            status: string;
+            statusCode: string;
+        }
+        
+        const sessions: JulesSession[] = [];
+        
+        for (const line of lines) {
+            if (line.includes('ID') && line.includes('Description')) continue;
             
-            let styledLine = line
-                .replace(/\bAwa\b/, '<span class="badge badge-warning">Awa</span>')
-                .replace(/\bCom\b/, '<span class="badge badge-success">Com</span>')
-                .replace(/\bIn \b/, '<span class="badge badge-primary">In </span>');
-            return `<div style="margin-bottom: 6px; font-family: monospace; white-space: pre; border-bottom: 1px solid rgba(255,255,255,0.02); padding-bottom: 6px;">${styledLine}</div>`;
-        }).join('');
+            const trimmedLine = line.trimEnd();
+            if (trimmedLine.length < 20) continue;
+            
+            // Split by two or more spaces to handle column padding
+            const parts = trimmedLine.split(/\\s{2,}/).map(s => s.trim()).filter(Boolean);
+            
+            if (parts.length >= 4) {
+                let id = parts[0];
+                let statusText = parts[parts.length - 1];
+                let lastActive = parts[parts.length - 2];
+                
+                if (!lastActive.includes('ago') && statusText.includes('ago')) {
+                    lastActive = statusText;
+                    statusText = 'Processing';
+                }
+                
+                let statusCode = 'unknown';
+                let status = statusText;
+                if (statusText.toLowerCase().startsWith('awa')) { statusCode = 'awaiting'; status = 'Awaiting Feedback'; }
+                else if (statusText.toLowerCase().startsWith('com')) { statusCode = 'completed'; status = 'Completed'; }
+                else if (statusText.toLowerCase().startsWith('in')) { statusCode = 'in_progress'; status = 'In Progress'; }
+                else if (statusText === 'Processing') { statusCode = 'in_progress'; status = 'In Progress'; }
+                
+                let descAndRepo = parts.slice(1, parts.length - (statusText === lastActive ? 1 : 2));
+                let repo = descAndRepo.length > 1 ? descAndRepo.pop()! : '';
+                let desc = descAndRepo.join(' ');
+                
+                sessions.push({ id, description: desc, repo, lastActive, status, statusCode });
+            }
+        }
+        
+        // Sort: Awaiting (1) > In Progress (2) > Completed (3) > Unknown (4)
+        const order: Record<string, number> = { 'awaiting': 1, 'in_progress': 2, 'completed': 3, 'unknown': 4 };
+        sessions.sort((a, b) => (order[a.statusCode] || 5) - (order[b.statusCode] || 5));
+        
+        if (sessions.length > 0) {
+            parsedContentHtml = `
+            <div style="overflow-x: auto; padding-bottom: 20px;">
+                <table class="jules-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Description</th>
+                            <th>ID</th>
+                            <th>Last Active</th>
+                            <th>Repo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${sessions.map(s => `
+                        <tr class="row-${s.statusCode}">
+                            <td><span class="badge badge-${s.statusCode}">${s.status}</span></td>
+                            <td class="desc-cell">${s.description}</td>
+                            <td class="id-cell">${s.id}</td>
+                            <td class="time-cell">${s.lastActive}</td>
+                            <td class="repo-cell">${s.repo}</td>
+                        </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+        } else {
+            parsedContentHtml = `<pre>${content}</pre>`;
+        }
     }
 
     return `<!DOCTYPE html>
@@ -407,6 +474,7 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
             --text-muted: #94a3b8;
             --glass: rgba(30, 33, 48, 0.7);
             --glass-border: rgba(255, 255, 255, 0.1);
+            --row-hover: rgba(255, 255, 255, 0.05);
         }
 
         body {
@@ -438,6 +506,9 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
 
         .container {
@@ -446,19 +517,21 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
             border-radius: 12px;
             padding: 30px;
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-            overflow-x: auto;
         }
 
         .badge {
-            padding: 2px 8px;
+            padding: 4px 10px;
             border-radius: 12px;
             font-size: 0.8em;
             font-weight: bold;
+            display: inline-block;
+            white-space: nowrap;
         }
 
-        .badge-success { color: var(--success); border: 1px solid var(--success); background: rgba(46, 204, 113, 0.1); }
-        .badge-warning { color: var(--warning); border: 1px solid var(--warning); background: rgba(241, 196, 15, 0.1); }
-        .badge-primary { color: var(--primary); border: 1px solid var(--primary); background: rgba(0, 210, 255, 0.1); }
+        .badge-completed { color: var(--success); border: 1px solid var(--success); background: rgba(46, 204, 113, 0.1); }
+        .badge-awaiting { color: var(--warning); border: 1px solid var(--warning); background: rgba(241, 196, 15, 0.1); }
+        .badge-in_progress { color: var(--primary); border: 1px solid var(--primary); background: rgba(0, 210, 255, 0.1); }
+        .badge-unknown { color: var(--text-muted); border: 1px solid var(--text-muted); background: rgba(255, 255, 255, 0.05); }
 
         .btn {
             background: transparent;
@@ -480,12 +553,84 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
         pre {
             font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
             white-space: pre-wrap;
+            color: #ccc;
         }
+
+        .jules-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            text-align: left;
+            min-width: 800px;
+        }
+
+        .jules-table th {
+            padding: 12px 16px;
+            color: var(--text-muted);
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid var(--glass-border);
+            white-space: nowrap;
+        }
+
+        .jules-table td {
+            padding: 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            transition: background 0.2s;
+        }
+
+        .jules-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .jules-table tr:hover td {
+            background: var(--row-hover);
+        }
+
+        .desc-cell {
+            font-weight: 500;
+            color: #fff;
+            max-width: 400px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .id-cell {
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            color: var(--text-muted);
+            font-size: 0.9em;
+        }
+
+        .time-cell {
+            color: var(--text-muted);
+            font-size: 0.9em;
+            white-space: nowrap;
+        }
+
+        .repo-cell {
+            color: var(--secondary);
+            font-size: 0.9em;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Subtle glow for awaiting rows to draw attention */
+        .row-awaiting td {
+            background: rgba(241, 196, 15, 0.02);
+        }
+        .row-awaiting:hover td {
+            background: rgba(241, 196, 15, 0.05);
+        }
+
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="title">🤖 Jules Operations</div>
+        <div class="title">✨ Jules Operations</div>
         <button class="btn" onclick="postMessage('refresh')">🔄 Refresh</button>
     </div>
     
@@ -496,7 +641,7 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
              </div>
              <style>@keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }</style>
             ` 
-            : `<pre>${formattedContent}</pre>`
+            : parsedContentHtml
         }
     </div>
 

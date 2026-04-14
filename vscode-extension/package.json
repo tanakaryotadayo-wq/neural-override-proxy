@@ -37,7 +37,7 @@
       {
         "command": "vortex.openJulesDashboard",
         "title": "VORTEX: Open Jules Dashboard",
-        "icon": "$(robot)"
+        "icon": "$(sparkle)"
       },
       {
         "command": "vortex.runAudit",
