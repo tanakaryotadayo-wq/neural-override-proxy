@@ -62,9 +62,10 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
             background: radial-gradient(circle at top left, #12172b 0%, var(--bg) 100%);
             color: var(--text);
             margin: 0;
-            padding: 30px;
+            padding: 15px;
             animation: fadeIn 0.6s ease-out;
             min-height: 100vh;
+            font-size: 13px;
         }
 
         @keyframes fadeIn {
@@ -74,33 +75,35 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
 
         .header {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 40px;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 25px;
             border-bottom: 1px solid var(--glass-border);
-            padding-bottom: 20px;
+            padding-bottom: 15px;
         }
 
         .header-title {
             display: flex;
-            align-items: center;
-            gap: 15px;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 5px;
         }
 
         .logo {
-            font-size: 2em;
+            font-size: 1.8em;
             background: -webkit-linear-gradient(45deg, var(--primary), var(--secondary));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             font-weight: 800;
-            letter-spacing: 2px;
+            letter-spacing: 1px;
+            margin-bottom: 2px;
         }
 
         .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 25px;
         }
 
         .card {
@@ -108,7 +111,7 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
             backdrop-filter: blur(10px);
             border: 1px solid var(--glass-border);
             border-radius: 12px;
-            padding: 24px;
+            padding: 18px;
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
             transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
@@ -119,19 +122,19 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
         }
 
         .card h3 {
-            margin: 0 0 15px 0;
+            margin: 0 0 12px 0;
             color: var(--text-muted);
-            font-size: 0.9em;
+            font-size: 0.85em;
             text-transform: uppercase;
             letter-spacing: 1px;
         }
 
         .stat-value {
-            font-size: 2.5em;
+            font-size: 2.2em;
             font-weight: bold;
             display: flex;
             align-items: baseline;
-            gap: 10px;
+            gap: 8px;
         }
 
         .stat-subtitle {
@@ -167,19 +170,21 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
             background: var(--glass);
             border: 1px solid var(--glass-border);
             border-radius: 12px;
-            padding: 24px;
-            overflow: hidden;
+            padding: 15px;
+            overflow-x: auto;
         }
 
         .logs-table {
             width: 100%;
             border-collapse: collapse;
+            font-size: 0.9em;
         }
 
         .logs-table th, .logs-table td {
-            padding: 12px 15px;
+            padding: 10px 8px;
             text-align: left;
             border-bottom: 1px solid rgba(255,255,255,0.05);
+            word-break: break-word;
         }
 
         .logs-table th {
@@ -206,9 +211,11 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
         .badge-recovery { background: rgba(241, 196, 15, 0.2); border: 1px solid var(--warning); color: var(--warning); }
 
         .actions {
-            display: flex;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
             gap: 10px;
-            margin-top: 20px;
+            width: 100%;
+            margin-top: 5px;
         }
 
         .btn {
@@ -261,9 +268,9 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
     <div class="header">
         <div class="header-title">
             <div class="logo">🌀 VORTEX</div>
-            <div>
+            <div style="display: flex; align-items: center;">
                 <span class="status-indicator"></span> 
-                <span style="color: var(--text-muted); font-size: 0.9em;">SYSTEM ONLINE</span>
+                <span style="color: var(--text-muted); font-size: 0.85em; font-weight: 500; letter-spacing: 1px;">SYSTEM ONLINE</span>
             </div>
         </div>
         <div class="actions">
@@ -281,10 +288,10 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
             <div class="progress-bar">
                 <div class="progress-fill"></div>
             </div>
-            <div style="margin-top: 15px; font-size: 0.8em; display: flex; justify-content: space-between; color: var(--text-muted);">
-                <span>${successCount} Success</span>
-                <span>${recoveryCount} Recoveries</span>
-                <span>${failureCount} Failures</span>
+            <div style="margin-top: 15px; font-size: 0.75em; display: flex; justify-content: space-between; color: var(--text-muted); font-weight: 600;">
+                <span style="color: var(--success)">${successCount} OK</span>
+                <span style="color: var(--warning)">${recoveryCount} FIX</span>
+                <span style="color: var(--danger)">${failureCount} ERR</span>
             </div>
         </div>
 
