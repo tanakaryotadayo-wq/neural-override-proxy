@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getDashboardHtml } from './dashboard';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -218,6 +219,7 @@ class ActionsProvider implements vscode.TreeDataProvider<ActionItem> {
 
   getChildren(): ActionItem[] {
     return [
+      new ActionItem('🚀 Open Dashboard', 'vortex.openDashboard', 'dashboard'),
       new ActionItem('🌀 Audit Active File', 'vortex.runAudit', 'shield'),
       new ActionItem('✂️ Audit Selection', 'vortex.runAuditSelection', 'selection'),
       new ActionItem('🔄 Switch Preset', 'vortex.switchPreset', 'symbol-key'),
@@ -243,7 +245,45 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ── Commands ────────────────────────────────────────────────────────────
 
+  let dashboardPanel: vscode.WebviewPanel | undefined;
+
   context.subscriptions.push(
+    vscode.commands.registerCommand('vortex.openDashboard', () => {
+      if (dashboardPanel) {
+        dashboardPanel.reveal(vscode.ViewColumn.One);
+      } else {
+        dashboardPanel = vscode.window.createWebviewPanel(
+          'vortexDashboard',
+          '🌀 VORTEX Dashboard',
+          vscode.ViewColumn.One,
+          { enableScripts: true }
+        );
+
+        const updateWebview = () => {
+          if (!dashboardPanel) return;
+          const status = {
+            preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
+            lastVerdict: statusProvider['lastResult']?.verdict || null
+          };
+          dashboardPanel.webview.html = getDashboardHtml(context.extensionUri, FLEET_LOG_DIR, () => status);
+        };
+
+        updateWebview();
+
+        dashboardPanel.webview.onDidReceiveMessage((msg) => {
+          if (msg.command === 'refresh') {
+            updateWebview();
+          } else if (msg.command === 'runAudit') {
+            vscode.commands.executeCommand('vortex.runAudit');
+          }
+        }, undefined, context.subscriptions);
+
+        dashboardPanel.onDidDispose(() => {
+          dashboardPanel = undefined;
+        }, null, context.subscriptions);
+      }
+    }),
+
     vscode.commands.registerCommand('vortex.runAudit', async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
@@ -275,6 +315,7 @@ export function activate(context: vscode.ExtensionContext) {
           } else {
             vscode.window.showErrorMessage(`⚠️ VORTEX: ${result.text}`);
           }
+          if (dashboardPanel) dashboardPanel.webview.postMessage({ command: 'refresh' });
         }
       );
     }),

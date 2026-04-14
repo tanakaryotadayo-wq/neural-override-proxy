@@ -42,6 +42,11 @@
     },
     "commands": [
       {
+        "command": "vortex.openDashboard",
+        "title": "VORTEX: Open Dashboard",
+        "icon": "$(dashboard)"
+      },
+      {
         "command": "vortex.runAudit",
         "title": "VORTEX: Run Audit on Active File",
         "icon": "$(shield)"
@@ -78,9 +83,14 @@
       ],
       "view/title": [
         {
+          "command": "vortex.openDashboard",
+          "when": "view == vortex-status",
+          "group": "navigation@1"
+        },
+        {
           "command": "vortex.refreshSidebar",
           "when": "view == vortex-status",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "vortex.runAudit",
