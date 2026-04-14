@@ -1,0 +1,10 @@
+{
+    // Neural Override Proxy — Antigravity IDE proxy settings
+    // mitmproxy を経由して全 API 通信を傍受する
+    "http.proxy": "http://127.0.0.1:18080",
+    "http.proxyStrictSSL": false,
+
+    // Electron が mitmproxy の CA 証明書を信頼するように設定
+    // 環境変数 NODE_EXTRA_CA_CERTS でも可
+    "http.systemCertificates": true
+}
