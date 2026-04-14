@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  proxy:
+    build: .
+    ports:
+      - "18008:18008"
+    # TODO: Environment variables, volumes, etc.
+
+  mitmweb:
+    image: mitmproxy/mitmproxy:8.1.1
+    ports:
+      - "8080:8080" # Proxy port
+      - "8081:8081" # Web UI port
+    command: mitmweb --web-host 0.0.0.0 --web-port 8081
+    # TODO: Load mitm_gemini_capture.py addon, volume mounts for saves and CA.
