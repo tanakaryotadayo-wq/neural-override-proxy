@@ -1,0 +1,2 @@
+FROM mitmproxy/mitmproxy:8.1.1
+RUN pip install blackboxprotobuf

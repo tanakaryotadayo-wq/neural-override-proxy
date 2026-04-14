@@ -1,0 +1,18 @@
+{
+  "type": "request",
+  "url": "http://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro-exp:streamGenerateContent",
+  "method": "POST",
+  "content_type": "grpc",
+  "headers": {
+    "Accept-Encoding": "identity",
+    "Content-Length": "266",
+    "Host": "generativelanguage.googleapis.com",
+    "User-Agent": "Python-urllib/3.9",
+    "Content-Type": "application/grpc",
+    "Connection": "close"
+  },
+  "body_size": 266,
+  "body_file": "/home/mitmproxy/captures/req_0001.bin",
+  "note": "Protobuf binary — injection attempted",
+  "timestamp": "2026-04-14T10:31:51.422330"
+}

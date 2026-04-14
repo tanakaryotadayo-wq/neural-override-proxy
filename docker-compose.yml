@@ -1,16 +1,36 @@
 version: '3.8'
 
 services:
-  proxy:
+  prompt-proxy:
     build: .
+    container_name: neural-override-proxy
     ports:
       - "18008:18008"
-    # TODO: Environment variables, volumes, etc.
+    command: ["--upstream", "https://generativelanguage.googleapis.com"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "-X", "OPTIONS", "http://localhost:18008"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   mitmweb:
-    image: mitmproxy/mitmproxy:8.1.1
+    build:
+      context: .
+      dockerfile: .Dockerfile.mitmproxy
+    container_name: mitmproxy
     ports:
-      - "8080:8080" # Proxy port
-      - "8081:8081" # Web UI port
-    command: mitmweb --web-host 0.0.0.0 --web-port 8081
-    # TODO: Load mitm_gemini_capture.py addon, volume mounts for saves and CA.
+      - "18080:8080" # Proxy listener
+      - "18081:8081" # Web UI
+    volumes:
+      - ./.mitmproxy:/home/mitmproxy/.mitmproxy
+      - ./mitm_gemini_capture.py:/home/mitmproxy/mitm_gemini_capture.py
+      - ./captures:/home/mitmproxy/captures
+    command: >
+      mitmweb
+      --web-host 0.0.0.0
+      --web-port 8081
+      --set listen_port=8080
+      --set confdir=/home/mitmproxy/.mitmproxy
+      -s /home/mitmproxy/mitm_gemini_capture.py
+    restart: unless-stopped

@@ -1,0 +1,16 @@
+{
+  "type": "response",
+  "url": "http://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro-exp:streamGenerateContent",
+  "status": 200,
+  "content_type": "grpc",
+  "headers": {
+    "content-type": "application/grpc",
+    "Date": "Tue, 14 Apr 2026 10:31:51 GMT",
+    "Server-Timing": "gfet4t7; dur=36",
+    "Connection": "close",
+    "Transfer-Encoding": "chunked"
+  },
+  "body_size": 0,
+  "body_file": "/home/mitmproxy/captures/resp_0001.bin",
+  "timestamp": "2026-04-14T10:31:51.481027"
+}
