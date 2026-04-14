@@ -170,7 +170,7 @@ export function activate(context: vscode.ExtensionContext) {
           if (!julesPanel) return;
           julesPanel.webview.html = getJulesHtml("Loading Jules Sessions...", true);
 
-          cp.exec('/opt/homebrew/bin/jules remote list --session', (err, stdout, stderr) => {
+          cp.exec('/opt/homebrew/bin/jules remote list --session', { env: { ...process.env, COLUMNS: '500' } }, (err, stdout, stderr) => {
             if (!julesPanel) return;
             if (err) {
               julesPanel.webview.html = getJulesHtml(`Error: ${stderr || err.message}`, false);
