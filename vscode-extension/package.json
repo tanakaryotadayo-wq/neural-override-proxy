@@ -27,16 +27,9 @@
     "views": {
       "vortex-sidebar": [
         {
-          "id": "vortex-status",
-          "name": "🌀 Status"
-        },
-        {
-          "id": "vortex-logs",
-          "name": "📋 Fleet Logs"
-        },
-        {
-          "id": "vortex-actions",
-          "name": "⚡ Actions"
+          "type": "webview",
+          "id": "vortex-sidebar-webview",
+          "name": "⚡ Control Center"
         }
       ]
     },
@@ -84,17 +77,17 @@
       "view/title": [
         {
           "command": "vortex.openDashboard",
-          "when": "view == vortex-status",
+          "when": "view == vortex-sidebar-webview",
           "group": "navigation@1"
         },
         {
           "command": "vortex.refreshSidebar",
-          "when": "view == vortex-status",
+          "when": "view == vortex-sidebar-webview",
           "group": "navigation@2"
         },
         {
           "command": "vortex.runAudit",
-          "when": "view == vortex-actions",
+          "when": "view == vortex-sidebar-webview",
           "group": "navigation"
         }
       ]

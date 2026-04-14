@@ -91,157 +91,64 @@ async function runVortexAudit(code: string, workspaceRoot: string): Promise<Audi
   });
 }
 
-// ── Sidebar: Status Tree ────────────────────────────────────────────────────
+// ── Sidebar: Webview Provider ───────────────────────────────────────────────
 
-class StatusItem extends vscode.TreeItem {
-  constructor(label: string, description?: string, icon?: string) {
-    super(label, vscode.TreeItemCollapsibleState.None);
-    this.description = description;
-    if (icon) {
-      this.iconPath = new vscode.ThemeIcon(icon);
+class VortexSidebarProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'vortex-sidebar-webview';
+  private _view?: vscode.WebviewView;
+
+  constructor(private readonly _extensionUri: vscode.Uri) {}
+
+  public resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    context: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken
+  ) {
+    this._view = webviewView;
+    webviewView.webview.options = { enableScripts: true };
+
+    const updateWebview = () => {
+      const status = {
+        preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
+        lastVerdict: lastAuditResult?.verdict || null
+      };
+      webviewView.webview.html = getDashboardHtml(this._extensionUri, FLEET_LOG_DIR, () => status);
+    };
+
+    updateWebview();
+
+    webviewView.webview.onDidReceiveMessage((msg) => {
+      if (msg.command === 'refresh') {
+        updateWebview();
+      } else if (msg.command === 'runAudit') {
+        vscode.commands.executeCommand('vortex.runAudit');
+      }
+    });
+  }
+
+  public refresh() {
+    if (this._view) {
+      this._view.webview.postMessage({ command: 'refresh' });
+      // Or fully reload HTML:
+      const status = {
+        preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
+        lastVerdict: lastAuditResult?.verdict || null
+      };
+      this._view.webview.html = getDashboardHtml(this._extensionUri, FLEET_LOG_DIR, () => status);
     }
   }
 }
 
-class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
-  private _onDidChange = new vscode.EventEmitter<StatusItem | undefined>();
-  readonly onDidChangeTreeData = this._onDidChange.event;
-
-  private lastResult: AuditResult | null = null;
-  private criticPath = '';
-
-  refresh() {
-    this.criticPath = resolveCriticScript();
-    this._onDidChange.fire(undefined);
-  }
-
-  setLastResult(result: AuditResult) {
-    this.lastResult = result;
-    this._onDidChange.fire(undefined);
-  }
-
-  getTreeItem(el: StatusItem) { return el; }
-
-  getChildren(): StatusItem[] {
-    const items: StatusItem[] = [];
-
-    // Critic status
-    items.push(new StatusItem(
-      'Critic Script',
-      this.criticPath ? '✅ Found' : '❌ Not found',
-      this.criticPath ? 'check' : 'error'
-    ));
-
-    // Preset
-    const preset = vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦';
-    items.push(new StatusItem('PCC Preset', `#${preset}`, 'symbol-key'));
-
-    // Last audit
-    if (this.lastResult) {
-      const icon = this.lastResult.verdict === 'VERIFIED' ? 'pass'
-        : this.lastResult.verdict === 'UNVERIFIED' ? 'error' : 'warning';
-      items.push(new StatusItem(
-        'Last Verdict',
-        `${this.lastResult.verdict} (${(this.lastResult.elapsed / 1000).toFixed(1)}s)`,
-        icon
-      ));
-    } else {
-      items.push(new StatusItem('Last Verdict', 'No audit yet', 'circle-outline'));
-    }
-
-    // Fleet logs count
-    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const logFile = path.join(FLEET_LOG_DIR, `fleet_${today}.jsonl`);
-    let logCount = 0;
-    try {
-      const content = fs.readFileSync(logFile, 'utf-8');
-      logCount = content.trim().split('\n').filter(Boolean).length;
-    } catch { /* no logs yet */ }
-    items.push(new StatusItem('Fleet Logs Today', `${logCount} entries`, 'notebook'));
-
-    return items;
-  }
-}
-
-// ── Sidebar: Fleet Logs Tree ────────────────────────────────────────────────
-
-class LogItem extends vscode.TreeItem {
-  constructor(entry: Record<string, unknown>) {
-    const type = entry.event_type as string;
-    const icon = type === 'success' ? '✅' : type === 'failure' ? '❌' : '🔄';
-    const task = (entry.task as string) ?? 'unknown';
-    super(`${icon} ${task}`, vscode.TreeItemCollapsibleState.None);
-    this.description = entry.timestamp
-      ? new Date(entry.timestamp as string).toLocaleTimeString()
-      : '';
-    this.tooltip = JSON.stringify(entry, null, 2);
-  }
-}
-
-class LogsProvider implements vscode.TreeDataProvider<LogItem> {
-  private _onDidChange = new vscode.EventEmitter<LogItem | undefined>();
-  readonly onDidChangeTreeData = this._onDidChange.event;
-
-  refresh() { this._onDidChange.fire(undefined); }
-
-  getTreeItem(el: LogItem) { return el; }
-
-  getChildren(): LogItem[] {
-    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const logFile = path.join(FLEET_LOG_DIR, `fleet_${today}.jsonl`);
-    try {
-      const content = fs.readFileSync(logFile, 'utf-8');
-      const lines = content.trim().split('\n').filter(Boolean);
-      return lines.reverse().slice(0, 50).map((line) => {
-        try { return new LogItem(JSON.parse(line)); } catch { return new LogItem({ task: line }); }
-      });
-    } catch {
-      return [new LogItem({ task: 'No logs today', event_type: 'info' })];
-    }
-  }
-}
-
-// ── Sidebar: Actions Tree ───────────────────────────────────────────────────
-
-class ActionItem extends vscode.TreeItem {
-  constructor(label: string, command: string, icon: string) {
-    super(label, vscode.TreeItemCollapsibleState.None);
-    this.iconPath = new vscode.ThemeIcon(icon);
-    this.command = { command, title: label };
-  }
-}
-
-class ActionsProvider implements vscode.TreeDataProvider<ActionItem> {
-  private _onDidChange = new vscode.EventEmitter<ActionItem | undefined>();
-  readonly onDidChangeTreeData = this._onDidChange.event;
-
-  getTreeItem(el: ActionItem) { return el; }
-
-  getChildren(): ActionItem[] {
-    return [
-      new ActionItem('🚀 Open Dashboard', 'vortex.openDashboard', 'dashboard'),
-      new ActionItem('🌀 Audit Active File', 'vortex.runAudit', 'shield'),
-      new ActionItem('✂️ Audit Selection', 'vortex.runAuditSelection', 'selection'),
-      new ActionItem('🔄 Switch Preset', 'vortex.switchPreset', 'symbol-key'),
-      new ActionItem('📋 View Logs', 'vortex.viewLogs', 'notebook'),
-      new ActionItem('🗑️ Clear Logs', 'vortex.clearLogs', 'trash'),
-    ];
-  }
-}
+let lastAuditResult: AuditResult | null = null;
 
 // ── Extension Activation ────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext) {
-  // Sidebar providers
-  const statusProvider = new StatusProvider();
-  const logsProvider = new LogsProvider();
-  const actionsProvider = new ActionsProvider();
-
-  vscode.window.registerTreeDataProvider('vortex-status', statusProvider);
-  vscode.window.registerTreeDataProvider('vortex-logs', logsProvider);
-  vscode.window.registerTreeDataProvider('vortex-actions', actionsProvider);
-
-  statusProvider.refresh();
+  // Sidebar provider
+  const sidebarProvider = new VortexSidebarProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(VortexSidebarProvider.viewType, sidebarProvider)
+  );
 
   // ── Commands ────────────────────────────────────────────────────────────
 
@@ -263,7 +170,7 @@ export function activate(context: vscode.ExtensionContext) {
           if (!dashboardPanel) return;
           const status = {
             preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
-            lastVerdict: statusProvider['lastResult']?.verdict || null
+            lastVerdict: lastAuditResult?.verdict || null
           };
           dashboardPanel.webview.html = getDashboardHtml(context.extensionUri, FLEET_LOG_DIR, () => status);
         };
@@ -297,7 +204,8 @@ export function activate(context: vscode.ExtensionContext) {
         { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX Auditing...' },
         async () => {
           const result = await runVortexAudit(code, wsRoot);
-          statusProvider.setLastResult(result);
+          lastAuditResult = result;
+          sidebarProvider.refresh();
 
           const channel = vscode.window.createOutputChannel('VORTEX Critic');
           channel.clear();
@@ -333,7 +241,8 @@ export function activate(context: vscode.ExtensionContext) {
         { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX Auditing selection...' },
         async () => {
           const result = await runVortexAudit(code, wsRoot);
-          statusProvider.setLastResult(result);
+          lastAuditResult = result;
+          sidebarProvider.refresh();
 
           const channel = vscode.window.createOutputChannel('VORTEX Critic');
           channel.clear();
@@ -364,15 +273,14 @@ export function activate(context: vscode.ExtensionContext) {
         );
         if (confirm === 'Clear') {
           fs.unlinkSync(logFile);
-          logsProvider.refresh();
+          sidebarProvider.refresh();
           vscode.window.showInformationMessage('Fleet logs cleared');
         }
       }
     }),
 
     vscode.commands.registerCommand('vortex.refreshSidebar', () => {
-      statusProvider.refresh();
-      logsProvider.refresh();
+      sidebarProvider.refresh();
     }),
 
     vscode.commands.registerCommand('vortex.switchPreset', async () => {
@@ -389,7 +297,7 @@ export function activate(context: vscode.ExtensionContext) {
       });
       if (pick) {
         await vscode.workspace.getConfiguration('vortex').update('preset', pick.value, true);
-        statusProvider.refresh();
+        sidebarProvider.refresh();
         vscode.window.showInformationMessage(`PCC Preset: ${pick.label}`);
       }
     }),
