@@ -372,88 +372,15 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
 }
 
 export function getJulesHtml(content: string, isLoading: boolean): string {
-    let parsedContentHtml = '';
+    let initialData = '[]';
+    let rawContentHtml = '';
 
     if (!isLoading) {
-        const lines = content.split('\\n');
-        
-        interface JulesSession {
-            id: string;
-            description: string;
-            repo: string;
-            lastActive: string;
-            status: string;
-            statusCode: string;
-        }
-        
-        const sessions: JulesSession[] = [];
-        
-        for (const line of lines) {
-            if (line.includes('ID') && line.includes('Description')) continue;
-            
-            const trimmedLine = line.trimEnd();
-            if (trimmedLine.length < 20) continue;
-            
-            // Split by two or more spaces to handle column padding
-            const parts = trimmedLine.split(/\\s{2,}/).map(s => s.trim()).filter(Boolean);
-            
-            if (parts.length >= 4) {
-                let id = parts[0];
-                let statusText = parts[parts.length - 1];
-                let lastActive = parts[parts.length - 2];
-                
-                if (!lastActive.includes('ago') && statusText.includes('ago')) {
-                    lastActive = statusText;
-                    statusText = 'Processing';
-                }
-                
-                let statusCode = 'unknown';
-                let status = statusText;
-                if (statusText.toLowerCase().startsWith('awa')) { statusCode = 'awaiting'; status = 'Awaiting Feedback'; }
-                else if (statusText.toLowerCase().startsWith('com')) { statusCode = 'completed'; status = 'Completed'; }
-                else if (statusText.toLowerCase().startsWith('in')) { statusCode = 'in_progress'; status = 'In Progress'; }
-                else if (statusText === 'Processing') { statusCode = 'in_progress'; status = 'In Progress'; }
-                
-                let descAndRepo = parts.slice(1, parts.length - (statusText === lastActive ? 1 : 2));
-                let repo = descAndRepo.length > 1 ? descAndRepo.pop()! : '';
-                let desc = descAndRepo.join(' ');
-                
-                sessions.push({ id, description: desc, repo, lastActive, status, statusCode });
-            }
-        }
-        
-        // Sort: Awaiting (1) > In Progress (2) > Completed (3) > Unknown (4)
-        const order: Record<string, number> = { 'awaiting': 1, 'in_progress': 2, 'completed': 3, 'unknown': 4 };
-        sessions.sort((a, b) => (order[a.statusCode] || 5) - (order[b.statusCode] || 5));
-        
-        if (sessions.length > 0) {
-            parsedContentHtml = `
-            <div style="overflow-x: auto; padding-bottom: 20px;">
-                <table class="jules-table">
-                    <thead>
-                        <tr>
-                            <th>Status</th>
-                            <th>Description</th>
-                            <th>ID</th>
-                            <th>Last Active</th>
-                            <th>Repo</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${sessions.map(s => `
-                        <tr class="row-${s.statusCode}">
-                            <td><span class="badge badge-${s.statusCode}">${s.status}</span></td>
-                            <td class="desc-cell">${s.description}</td>
-                            <td class="id-cell">${s.id}</td>
-                            <td class="time-cell">${s.lastActive}</td>
-                            <td class="repo-cell">${s.repo}</td>
-                        </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>`;
+        if (content.startsWith('[')) {
+            // It's JSON from GitHub API
+            initialData = content;
         } else {
-            parsedContentHtml = `<pre>${content}</pre>`;
+            rawContentHtml = '<div class="error-box"><pre>' + content + '</pre></div>';
         }
     }
 
@@ -466,15 +393,17 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
     <style>
         :root {
             --bg: #0f111a;
+            --panel-bg: rgba(30, 33, 48, 0.7);
             --primary: #00d2ff;
             --secondary: #3a7bd5;
             --success: #2ecc71;
             --warning: #f1c40f;
             --text: #e2e8f0;
             --text-muted: #94a3b8;
-            --glass: rgba(30, 33, 48, 0.7);
             --glass-border: rgba(255, 255, 255, 0.1);
             --row-hover: rgba(255, 255, 255, 0.05);
+            --comment-bg: rgba(255, 255, 255, 0.03);
+            --comment-jules: rgba(0, 210, 255, 0.08);
         }
 
         body {
@@ -482,26 +411,26 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
             background: var(--bg);
             color: var(--text);
             margin: 0;
-            padding: 40px;
-            animation: fadeIn 0.4s ease-out;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+            padding: 20px;
+            height: 100vh;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
         .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
             border-bottom: 1px solid var(--glass-border);
-            padding-bottom: 20px;
+            flex-shrink: 0;
         }
 
         .title {
-            font-size: 2em;
+            font-size: 1.8em;
             background: -webkit-linear-gradient(45deg, var(--primary), var(--secondary));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -511,144 +440,341 @@ export function getJulesHtml(content: string, isLoading: boolean): string {
             gap: 12px;
         }
 
-        .container {
-            background: var(--glass);
-            border: 1px solid var(--glass-border);
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-        }
-
-        .badge {
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 0.8em;
-            font-weight: bold;
-            display: inline-block;
-            white-space: nowrap;
-        }
-
-        .badge-completed { color: var(--success); border: 1px solid var(--success); background: rgba(46, 204, 113, 0.1); }
-        .badge-awaiting { color: var(--warning); border: 1px solid var(--warning); background: rgba(241, 196, 15, 0.1); }
-        .badge-in_progress { color: var(--primary); border: 1px solid var(--primary); background: rgba(0, 210, 255, 0.1); }
-        .badge-unknown { color: var(--text-muted); border: 1px solid var(--text-muted); background: rgba(255, 255, 255, 0.05); }
-
         .btn {
             background: transparent;
             border: 1px solid var(--primary);
             color: var(--primary);
-            padding: 10px 20px;
+            padding: 8px 16px;
             border-radius: 6px;
             cursor: pointer;
             font-weight: bold;
             transition: all 0.2s;
         }
-
         .btn:hover {
             background: var(--primary);
             color: var(--bg);
-            box-shadow: 0 0 15px var(--primary);
+            box-shadow: 0 0 10px var(--primary);
         }
 
-        pre {
-            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-            white-space: pre-wrap;
-            color: #ccc;
+        .layout {
+            display: flex;
+            flex: 1;
+            gap: 20px;
+            overflow: hidden;
         }
 
-        .jules-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            text-align: left;
-            min-width: 800px;
+        .sidebar {
+            width: 35%;
+            background: var(--panel-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
         }
 
-        .jules-table th {
-            padding: 12px 16px;
-            color: var(--text-muted);
-            font-size: 0.85em;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+        .main-panel {
+            width: 65%;
+            background: var(--panel-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            display: none; /* hidden until selected */
+            overflow: hidden;
+        }
+
+        .issue-item {
+            padding: 15px;
             border-bottom: 1px solid var(--glass-border);
-            white-space: nowrap;
-        }
-
-        .jules-table td {
-            padding: 16px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            cursor: pointer;
             transition: background 0.2s;
         }
-
-        .jules-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .jules-table tr:hover td {
+        .issue-item:hover, .issue-item.active {
             background: var(--row-hover);
         }
-
-        .desc-cell {
-            font-weight: 500;
+        .issue-title {
+            font-weight: bold;
+            font-size: 0.95em;
+            margin-bottom: 8px;
+            line-height: 1.4;
             color: #fff;
-            max-width: 400px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
-
-        .id-cell {
-            font-family: 'SFMono-Regular', Consolas, monospace;
+        .issue-meta {
+            font-size: 0.8em;
             color: var(--text-muted);
-            font-size: 0.9em;
+            display: flex;
+            justify-content: space-between;
         }
+        
+        .badge {
+            padding: 3px 8px;
+            border-radius: 8px;
+            font-size: 0.75em;
+            font-weight: bold;
+            border: 1px solid;
+            white-space: nowrap;
+        }
+        .badge-awaiting { color: var(--warning); border-color: var(--warning); background: rgba(241, 196, 15, 0.1); }
+        .badge-active { color: var(--primary); border-color: var(--primary); background: rgba(0, 210, 255, 0.1); }
 
-        .time-cell {
+        .chat-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--glass-border);
+            font-weight: bold;
+            background: rgba(0,0,0,0.2);
+            font-size: 1.1em;
+            word-break: break-all;
+        }
+        .chat-history {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .comment {
+            background: var(--comment-bg);
+            border: 1px solid var(--glass-border);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+        .comment.jules {
+            background: var(--comment-jules);
+            border-color: rgba(0, 210, 255, 0.3);
+        }
+        .comment-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 0.85em;
             color: var(--text-muted);
-            font-size: 0.9em;
-            white-space: nowrap;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding-bottom: 5px;
+        }
+        .comment-body {
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
 
-        .repo-cell {
-            color: var(--secondary);
-            font-size: 0.9em;
-            max-width: 150px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+        .chat-input {
+            padding: 15px;
+            border-top: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: rgba(0,0,0,0.2);
+        }
+        textarea {
+            width: 100%;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--glass-border);
+            color: white;
+            padding: 12px;
+            border-radius: 6px;
+            resize: vertical;
+            min-height: 80px;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        .chat-actions {
+            display: flex;
+            justify-content: flex-end;
         }
 
-        /* Subtle glow for awaiting rows to draw attention */
-        .row-awaiting td {
-            background: rgba(241, 196, 15, 0.02);
+        /* Loading */
+        .loader {
+            color: var(--primary); 
+            text-align: center; 
+            padding: 40px; 
+            font-size: 1.2em;
+            animation: pulse 1.5s infinite;
         }
-        .row-awaiting:hover td {
-            background: rgba(241, 196, 15, 0.05);
-        }
-
+        @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="title">✨ Jules Operations</div>
-        <button class="btn" onclick="postMessage('refresh')">🔄 Refresh</button>
+        <div class="title">✨ Jules Communicator</div>
+        <button class="btn" onclick="vscode.postMessage({ command: 'refresh' })">🔄 Refresh</button>
     </div>
     
-    <div class="container">
-        ${isLoading ? 
-            `<div style="color: var(--primary); text-align: center; padding: 40px; font-size: 1.2em;">
-                <span style="display:inline-block; animation: pulse 1.5s infinite;">Scanning active sessions...</span>
-             </div>
-             <style>@keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }</style>
-            ` 
-            : parsedContentHtml
-        }
+    ` + (isLoading ? '<div class="loader">Scanning active sessions...</div>' : '') + `
+    ` + rawContentHtml + `
+
+    <div class="layout" id="app-layout" style="` + ((isLoading || rawContentHtml) ? 'display: none;' : '') + `">
+        <div class="sidebar" id="sidebar"></div>
+        <div class="main-panel" id="main-panel">
+            <div class="chat-header" id="chat-header">Select an issue</div>
+            <div class="chat-history" id="chat-history"></div>
+            <div class="chat-input" id="chat-input-container">
+                <textarea id="reply-box" placeholder="Type your reply to Jules..."></textarea>
+                <div class="chat-actions">
+                    <button class="btn" id="send-btn">Send Reply</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
         const vscode = acquireVsCodeApi();
-        function postMessage(command) {
-            vscode.postMessage({ command });
+        const issues = ` + initialData + `;
+        let activeIssue = null;
+
+        function timeAgo(dateString) {
+            const date = new Date(dateString);
+            const seconds = Math.floor((new Date() - date) / 1000);
+            let interval = seconds / 3600;
+            if (interval > 24) return Math.floor(interval / 24) + " days ago";
+            if (interval >= 1) return Math.floor(interval) + " h ago";
+            interval = seconds / 60;
+            if (interval >= 1) return Math.floor(interval) + " m ago";
+            return Math.floor(seconds) + " s ago";
+        }
+
+        function renderSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.innerHTML = '';
+
+            if (issues.length === 0) {
+                sidebar.innerHTML = '<div style="padding: 20px; color: var(--text-muted); text-align:center;">No active Jules issues found.</div>';
+                return;
+            }
+
+            // Sort: Assume issues with "awaiting" or more recent comments are higher priority
+            issues.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+            issues.forEach(issue => {
+                const el = document.createElement('div');
+                el.className = 'issue-item';
+                
+                // Try to infer status from labels
+                let isAwaiting = false;
+                if (issue.labels) {
+                    isAwaiting = issue.labels.some(l => l.name.toLowerCase().includes('awaiting'));
+                }
+                const badgeClass = isAwaiting ? 'badge-awaiting' : 'badge-active';
+                const badgeText = isAwaiting ? 'Awaiting Feedback' : 'Active';
+
+                el.innerHTML = 
+                    '<div class="issue-title">' + issue.title + '</div>' +
+                    '<div class="issue-meta">' +
+                        '<span>#' + issue.number + '</span>' +
+                        '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
+                    '</div>' +
+                    '<div class="issue-meta" style="margin-top: 5px;">' +
+                        '<span>' + timeAgo(issue.updated_at) + '</span>' +
+                    '</div>';
+
+                el.onclick = () => selectIssue(issue, el);
+                sidebar.appendChild(el);
+            });
+        }
+
+        function selectIssue(issue, element) {
+            activeIssue = issue;
+            document.querySelectorAll('.issue-item').forEach(el => el.classList.remove('active'));
+            if (element) element.classList.add('active');
+
+            const mainPanel = document.getElementById('main-panel');
+            mainPanel.style.display = 'flex';
+
+            document.getElementById('chat-header').textContent = issue.title;
+            const history = document.getElementById('chat-history');
+            history.innerHTML = '<div class="loader">Loading conversation...</div>';
+
+            // Request comments from the extension (authenticated fetch)
+            vscode.postMessage({
+                command: 'fetchComments',
+                commentsUrl: issue.comments_url,
+                issueId: issue.id
+            });
+        }
+
+        function renderComments(comments) {
+            const history = document.getElementById('chat-history');
+            history.innerHTML = '';
+
+            // Add original issue body
+            if (activeIssue && activeIssue.body) {
+                comments.unshift({
+                    user: activeIssue.user,
+                    created_at: activeIssue.created_at,
+                    body: activeIssue.body
+                });
+            }
+
+            if (!comments || comments.length === 0) {
+                history.innerHTML = '<div style="color: var(--text-muted);">No comments yet.</div>';
+                return;
+            }
+
+            comments.forEach(c => {
+                const isJules = c.user.login.toLowerCase().includes('jules');
+                const el = document.createElement('div');
+                el.className = 'comment ' + (isJules ? 'jules' : '');
+                el.innerHTML = 
+                    '<div class="comment-header">' +
+                        '<strong style="color: ' + (isJules ? 'var(--primary)' : 'var(--text)') + '">' + c.user.login + '</strong>' +
+                        '<span>' + new Date(c.created_at).toLocaleString() + '</span>' +
+                    '</div>' +
+                    '<div class="comment-body">' + escapeHtml(c.body) + '</div>';
+                history.appendChild(el);
+            });
+
+            // Scroll to bottom
+            history.scrollTop = history.scrollHeight;
+        }
+        
+        function escapeHtml(unsafe) {
+            if (!unsafe) return "";
+            return String(unsafe)
+                 .replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
+        }
+
+        document.getElementById('send-btn').addEventListener('click', () => {
+            const box = document.getElementById('reply-box');
+            const text = box.value.trim();
+            if (!text || !activeIssue) return;
+
+            // Send reply via extension
+            vscode.postMessage({
+                command: 'postReply',
+                commentsUrl: activeIssue.comments_url,
+                issueId: activeIssue.id,
+                body: text
+            });
+
+            box.value = '';
+            document.getElementById('send-btn').textContent = 'Sending...';
+        });
+
+        window.addEventListener('message', event => {
+            const msg = event.data;
+            if (msg.command === 'renderComments' && activeIssue && activeIssue.id === msg.issueId) {
+                renderComments(msg.comments);
+            } else if (msg.command === 'refreshComments') {
+                if (activeIssue && activeIssue.id === msg.issueId) {
+                    document.getElementById('send-btn').textContent = 'Send Reply';
+                    selectIssue(activeIssue, document.querySelector('.issue-item.active'));
+                }
+            }
+        });
+
+        if (issues.length > 0) {
+            renderSidebar();
         }
     </script>
 </body>

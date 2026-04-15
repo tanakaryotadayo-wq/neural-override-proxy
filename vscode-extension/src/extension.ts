@@ -14,19 +14,14 @@ const FLEET_LOG_DIR = path.join(
 
 // ── Resolve Script Paths ────────────────────────────────────────────────────
 
-function resolveCriticScript(): string {
+function resolveCriticScript(context: vscode.ExtensionContext): string {
   const config = vscode.workspace.getConfiguration('vortex');
   const custom = config.get<string>('criticScript');
   if (custom && fs.existsSync(custom)) { return custom; }
 
-  // Auto-detect relative to extension parent
-  const candidates = [
-    path.join(__dirname, '../../critic', CRITIC_SCRIPT_NAME),
-    path.join(process.env.HOME ?? '', 'neural-override-proxy/critic', CRITIC_SCRIPT_NAME),
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) { return c; }
-  }
+  // Bundle package script
+  const bundled = path.join(context.extensionPath, 'assets', 'critic', CRITIC_SCRIPT_NAME);
+  if (fs.existsSync(bundled)) { return bundled; }
   return '';
 }
 
@@ -39,8 +34,8 @@ interface AuditResult {
   elapsed: number;
 }
 
-async function runVortexAudit(code: string, workspaceRoot: string): Promise<AuditResult> {
-  const criticScript = resolveCriticScript();
+async function runVortexAudit(code: string, workspaceRoot: string, context: vscode.ExtensionContext): Promise<AuditResult> {
+  const criticScript = resolveCriticScript(context);
   if (!criticScript) {
     return { verdict: 'ERROR', text: 'vortex-critic.py not found', preset: '', elapsed: 0 };
   }
@@ -155,43 +150,87 @@ export function activate(context: vscode.ExtensionContext) {
   let julesPanel: vscode.WebviewPanel | undefined;
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('vortex.openJulesDashboard', () => {
+    vscode.commands.registerCommand('vortex.openAsyncTaskDashboard', async () => {
       if (julesPanel) {
         julesPanel.reveal(vscode.ViewColumn.One);
-      } else {
-        julesPanel = vscode.window.createWebviewPanel(
-          'julesDashboard',
-          '🤖 Jules Operations',
-          vscode.ViewColumn.One,
-          { enableScripts: true }
-        );
-
-        const updateJulesView = () => {
-          if (!julesPanel) return;
-          julesPanel.webview.html = getJulesHtml("Loading Jules Sessions...", true);
-
-          cp.exec('/opt/homebrew/bin/jules remote list --session', { env: { ...process.env, COLUMNS: '500' } }, (err, stdout, stderr) => {
-            if (!julesPanel) return;
-            if (err) {
-              julesPanel.webview.html = getJulesHtml(`Error: ${stderr || err.message}`, false);
-            } else {
-              julesPanel.webview.html = getJulesHtml(stdout, false);
-            }
-          });
-        };
-
-        updateJulesView();
-
-        julesPanel.webview.onDidReceiveMessage((msg) => {
-          if (msg.command === 'refresh') {
-            updateJulesView();
-          }
-        }, undefined, context.subscriptions);
-
-        julesPanel.onDidDispose(() => {
-          julesPanel = undefined;
-        }, null, context.subscriptions);
+        return;
       }
+      
+      let token = '';
+      try {
+        const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: true });
+        token = session.accessToken;
+      } catch (err) {
+        vscode.window.showErrorMessage('GitHub Authentication is required to access Jules operations.');
+        return;
+      }
+
+      julesPanel = vscode.window.createWebviewPanel(
+        'asyncTaskDashboard',
+        '✨ Async Tasks (GitHub Issues)',
+        vscode.ViewColumn.One,
+        { enableScripts: true, retainContextWhenHidden: true }
+      );
+
+      const updateJulesView = async () => {
+        if (!julesPanel) return;
+        julesPanel.webview.html = getJulesHtml("Loading Jules Sessions from GitHub...", true);
+        try {
+          // Fetch open issues mentioning jules involving the current user
+          const res = await (globalThis as any).fetch(`https://api.github.com/search/issues?q=involves:@me+"jules"+is:open+is:issue`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+          });
+          const data = await res.json() as any;
+          if (data.items) {
+             // Pass the raw JSON array to the dashboard parser instead of a CLI string
+             julesPanel.webview.html = getJulesHtml(JSON.stringify(data.items), false);
+          } else {
+             julesPanel.webview.html = getJulesHtml(`Error: ${JSON.stringify(data)}`, false);
+          }
+        } catch (err: any) {
+          julesPanel.webview.html = getJulesHtml(`Error: ${err.message}`, false);
+        }
+      };
+
+      updateJulesView();
+
+      julesPanel.webview.onDidReceiveMessage(async (msg) => {
+        if (msg.command === 'refresh') {
+          updateJulesView();
+        } else if (msg.command === 'fetchComments') {
+          // Fetch issue comments
+          try {
+            const res = await (globalThis as any).fetch(msg.commentsUrl, {
+              headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+            });
+            const comments = await res.json();
+            julesPanel?.webview.postMessage({ command: 'renderComments', comments, issueId: msg.issueId });
+          } catch (err: any) {
+            vscode.window.showErrorMessage('Failed to fetch comments: ' + err.message);
+          }
+        } else if (msg.command === 'postReply') {
+          try {
+            const res = await (globalThis as any).fetch(msg.commentsUrl, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+              body: JSON.stringify({ body: msg.body })
+            });
+            if (res.ok) {
+              vscode.window.showInformationMessage('Reply sent to Jules successfully!');
+              // Re-fetch comments to show the new one
+              julesPanel?.webview.postMessage({ command: 'refreshComments', commentsUrl: msg.commentsUrl, issueId: msg.issueId });
+            } else {
+              vscode.window.showErrorMessage(`Failed to send reply: ${res.statusText}`);
+            }
+          } catch (err: any) {
+            vscode.window.showErrorMessage('Failed to send reply: ' + err.message);
+          }
+        }
+      }, undefined, context.subscriptions);
+
+      julesPanel.onDidDispose(() => {
+        julesPanel = undefined;
+      }, null, context.subscriptions);
     }),
 
     vscode.commands.registerCommand('vortex.runAudit', async () => {
@@ -206,7 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX Auditing...' },
         async () => {
-          const result = await runVortexAudit(code, wsRoot);
+          const result = await runVortexAudit(code, wsRoot, context);
           lastAuditResult = result;
           sidebarProvider.refresh();
 
@@ -243,7 +282,7 @@ export function activate(context: vscode.ExtensionContext) {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX Auditing selection...' },
         async () => {
-          const result = await runVortexAudit(code, wsRoot);
+          const result = await runVortexAudit(code, wsRoot, context);
           lastAuditResult = result;
           sidebarProvider.refresh();
 
@@ -304,6 +343,18 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage(`PCC Preset: ${pick.label}`);
       }
     }),
+  );
+
+  // ── Auto Audit on Save ────────────────────────────────────────────────────
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(async (doc) => {
+      const config = vscode.workspace.getConfiguration('vortex');
+      if (config.get<boolean>('autoAuditOnSave')) {
+        if (vscode.window.activeTextEditor?.document === doc) {
+          vscode.commands.executeCommand('vortex.runAudit');
+        }
+      }
+    })
   );
 
   // Status bar

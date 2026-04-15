@@ -55,3 +55,31 @@ docker-compose up -d
 # JSON 出力
 ./analyze_protobuf.py --json captures/req_XXXX.bin
 ```
+
+## Gemini Code Assist Local A2A Bridge
+
+Gemini Code Assist の既存 UI をそのまま使いながら、A2A backend だけをローカル lane に差し替える bridge を追加した。
+
+```bash
+venv/bin/python titan-bridge/gemini_a2a_bridge.py --host 127.0.0.1 --port 8765
+```
+
+デフォルト配線:
+
+| Lane | Port | Default model |
+| --- | --- | --- |
+| conversation | 8103 | `Gemma-4-26B-A4B-Heretic-MLX-8bit` |
+| agent | 8102 | `Qwen3-Coder-Next-Abliterated-8bit` |
+| utility | 8101 | `Qwen3.5-9B-abliterated-MLX-4bit` |
+
+VS Code 側は `geminicodeassist.a2a.address` を bridge に向ける:
+
+```json
+"geminicodeassist.a2a.address": "http://127.0.0.1:8765"
+```
+
+補足:
+
+- `/.well-known/agent-card.json` と `/v1/*` の A2A HTTP+JSON surface を提供する
+- `JSONRPC` fallback も同じ endpoint で受ける
+- 画像入力は現状 fail-fast。信頼できる VL backend をまだ配線していないため、text-first として扱う

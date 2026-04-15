@@ -35,8 +35,8 @@
     },
     "commands": [
       {
-        "command": "vortex.openJulesDashboard",
-        "title": "VORTEX: Open Jules Dashboard",
+        "command": "vortex.openAsyncTaskDashboard",
+        "title": "VORTEX: Open Async Task Dashboard",
         "icon": "$(sparkle)"
       },
       {
@@ -76,7 +76,7 @@
       ],
       "view/title": [
         {
-          "command": "vortex.openJulesDashboard",
+          "command": "vortex.openAsyncTaskDashboard",
           "when": "view == vortex-sidebar-webview",
           "group": "navigation@1"
         },
@@ -113,11 +113,6 @@
           "default": "",
           "description": "Path to vortex-critic.py (auto-detected if empty)"
         },
-        "vortex.fleetBridge": {
-          "type": "string",
-          "default": "",
-          "description": "Path to fleet_bridge.py (auto-detected if empty)"
-        },
         "vortex.autoAuditOnSave": {
           "type": "boolean",
           "default": false,
@@ -132,6 +127,7 @@
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.7.3"
