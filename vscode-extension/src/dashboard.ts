@@ -33,6 +33,10 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
     const total = successCount + failureCount + recoveryCount;
     const successRate = total > 0 ? Math.round(((successCount + recoveryCount) / total) * 100) : 0;
     const status = getStatus();
+    const newgate = status.newgate ?? {};
+    const newgateConnected = Boolean(newgate.connected);
+    const newgateBadgeClass = newgateConnected ? 'badge-success' : 'badge-failure';
+    const newgateBridgeLabel = newgate.bridgeUrl || 'not configured';
 
     // Premium UI Design
     return `<!DOCTYPE html>
@@ -332,6 +336,37 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
                         ${status.lastVerdict || 'PENDING'}
                     </span>
                 </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Newgate Link</h3>
+            <div class="critic-panel">
+                <div>
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Bridge:</span>
+                    <span class="badge ${newgateBadgeClass}" style="float:right;">${newgateConnected ? 'ONLINE' : 'OFFLINE'}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Version:</span>
+                    <span style="float:right;">${newgate.version || '-'}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Embedding:</span>
+                    <span style="float:right;">${newgate.embeddingModel || '-'}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Memory:</span>
+                    <span style="float:right;">${newgate.recallStatus || '-'} / ${newgate.storeStatus || '-'}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">P0 Focus:</span>
+                    <span style="float:right;">${newgate.p0Count ?? 0} items</span>
+                </div>
+            </div>
+            <div class="log-result" style="margin-top: 12px;">${newgateBridgeLabel}</div>
+            ${newgate.error ? `<div style="margin-top: 8px; color: var(--warning); font-size: 0.8em;">${newgate.error}</div>` : ''}
+            <div style="margin-top: 12px;">
+                <button class="btn" onclick="postMessage('openNewgate')">🧠 Open Newgate Snapshot</button>
             </div>
         </div>
     </div>

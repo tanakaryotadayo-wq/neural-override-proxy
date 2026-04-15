@@ -82,4 +82,7 @@ VS Code 側は `geminicodeassist.a2a.address` を bridge に向ける:
 
 - `/.well-known/agent-card.json` と `/v1/*` の A2A HTTP+JSON surface を提供する
 - `JSONRPC` fallback も同じ endpoint で受ける
+- Gemini UI 向け custom command として `acp_deepthink` / `acp_deepsearch` を追加し、`gemini` / `claude` / `copilot` CLI を PCC 注入つきで呼べる
+- Newgate 要約も bridge に埋め込み、`newgate_status` / `newgate_compare` / `newgate_roadmap` / `newgate_memory_pipeline` / `newgate_deepthink` / `newgate_deepsearch` を叩ける
+- Newgate の埋め込みモデル前提は `qwen3-embedding-8b` (4096d)
 - 画像入力は現状 fail-fast。信頼できる VL backend をまだ配線していないため、text-first として扱う

@@ -17,15 +17,19 @@ pretending multimodal support exists.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
@@ -126,6 +130,116 @@ UTILITY_HINT_TERMS = (
     "triage",
     "transform",
 )
+
+ACP_COMMAND_DEFAULTS = {
+    "acp_deepthink": {
+        "description": "ACP×CLI×PCC で設計・アーキテクチャの深掘り分析を実行する。",
+        "default_runtime": "gemini",
+        "default_model": "deep",
+        "default_preset": "刃",
+        "mode_prompt": (
+            "Mode: ACP DEEPTHINK\n"
+            "Goal: architecture and design analysis.\n"
+            "Focus on structure, tradeoffs, failure modes, alternatives, missing evidence, "
+            "and the safest next move."
+        ),
+    },
+    "acp_deepsearch": {
+        "description": "ACP×CLI×PCC で技術調査・論点探索を実行する。",
+        "default_runtime": "gemini",
+        "default_model": "standard",
+        "default_preset": "探",
+        "mode_prompt": (
+            "Mode: ACP DEEPSEARCH\n"
+            "Goal: technical research and issue exploration.\n"
+            "Surface unknowns, compare options, identify missing facts, and avoid unsupported certainty."
+        ),
+    },
+}
+
+ACP_RUNTIME_MODELS = {
+    "gemini": {
+        "fast": "gemini-2.5-flash",
+        "standard": "gemini-2.5-pro",
+        "deep": "gemini-3.1-pro-preview",
+    },
+    "claude": {
+        "fast": "sonnet",
+        "standard": "sonnet",
+        "deep": "opus",
+    },
+    "copilot": {
+        "fast": "gpt-5-mini",
+        "standard": "gpt-5.4-mini",
+        "deep": "gpt-5.4",
+    },
+}
+
+CLI_SEARCH_DIRS = (
+    "/opt/homebrew/bin",
+    os.path.expanduser("~/.local/bin"),
+)
+
+NEWGATE_PROFILE_PATH = Path(__file__).with_name("newgate_profile.json")
+
+NEWGATE_SECTION_COMMANDS = {
+    "newgate_status": {
+        "description": "Newgate の現状・埋め込み基盤・主要ステータスを返す。",
+        "section": "status",
+    },
+    "newgate_compare": {
+        "description": "Newgate の競合比較と独自 IP を返す。",
+        "section": "competition",
+    },
+    "newgate_roadmap": {
+        "description": "Newgate の優先課題と戦略ビジョンを返す。",
+        "section": "roadmap",
+    },
+    "newgate_memory_pipeline": {
+        "description": "Newgate の file-first memory pipeline 状態を返す。",
+        "section": "memory",
+    },
+}
+
+NEWGATE_ACP_COMMANDS = {
+    "newgate_deepthink": {
+        "description": "Newgate 文脈つきで ACP DEEPTHINK を実行する。",
+        "spec": "acp_deepthink",
+        "focus": "architecture",
+    },
+    "newgate_deepsearch": {
+        "description": "Newgate 文脈つきで ACP DEEPSEARCH を実行する。",
+        "spec": "acp_deepsearch",
+        "focus": "research",
+    },
+}
+
+_PCC_CRITIC = None
+_PCC_CRITIC_PATH = Path(__file__).with_name("pcc_critic.py")
+if _PCC_CRITIC_PATH.exists():
+    spec = importlib.util.spec_from_file_location("bridge_pcc_critic", _PCC_CRITIC_PATH)
+    if spec and spec.loader:
+        _PCC_CRITIC = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_PCC_CRITIC)
+
+
+def clone_json(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def load_newgate_profile() -> Dict[str, Any]:
+    if not NEWGATE_PROFILE_PATH.exists():
+        return {
+            "name": "Newgate Cognitive Engine",
+            "version": "missing-profile",
+            "embedding": {"primaryModel": "qwen3-embedding-8b"},
+            "priorities": [],
+            "memory": {},
+            "competition": {},
+            "vision": [],
+        }
+    with NEWGATE_PROFILE_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def now_iso() -> str:
@@ -334,6 +448,59 @@ def build_text_message(role: str, text: str, task_id: str, context_id: str, meta
     }
 
 
+def inject_pcc_prompt(prompt: str, preset: str) -> str:
+    if _PCC_CRITIC and hasattr(_PCC_CRITIC, "inject_pcc"):
+        return _PCC_CRITIC.inject_pcc(prompt, preset)
+    return prompt
+
+
+def audit_acp_response(text: str) -> Dict[str, Any]:
+    if _PCC_CRITIC and hasattr(_PCC_CRITIC, "audit_response"):
+        return _PCC_CRITIC.audit_response(text)
+    return {"verdict": "NEEDS_EVIDENCE", "sycophancy": 0.0, "evidence_count": 0, "words": len(text.split())}
+
+
+def runtime_model(runtime: str, requested_model: str) -> str:
+    normalized_runtime = str(runtime).strip().lower()
+    aliases = ACP_RUNTIME_MODELS.get(normalized_runtime, {})
+    return aliases.get(requested_model, requested_model)
+
+
+def build_newgate_context(profile: Dict[str, Any], focus: str, user_prompt: str) -> str:
+    summary = {
+        "name": profile.get("name"),
+        "version": profile.get("version"),
+        "workspace": profile.get("workspace"),
+        "scale": profile.get("scale"),
+        "embedding": profile.get("embedding"),
+        "routing": profile.get("routing"),
+        "priorities": profile.get("priorities"),
+        "memory": profile.get("memory"),
+        "competition": profile.get("competition"),
+        "vision": profile.get("vision"),
+        "validatedFacts": profile.get("validatedFacts"),
+        "focus": focus,
+    }
+    return (
+        "[Newgate Context]\n"
+        "Treat the following as the current architecture snapshot and operating assumptions.\n"
+        f"{json.dumps(summary, ensure_ascii=False, indent=2)}\n"
+        "---\n"
+        "[User Request]\n"
+        f"{user_prompt}"
+    )
+
+
+@dataclass(frozen=True)
+class AcpCommandSpec:
+    name: str
+    description: str
+    default_runtime: str
+    default_model: str
+    default_preset: str
+    mode_prompt: str
+
+
 @dataclass
 class RouteConfig:
     route_id: str
@@ -431,6 +598,10 @@ class LocalGeminiA2ABridge:
         self.timeout_seconds = timeout_seconds
         self.advertise_host = advertise_host or ("127.0.0.1" if host in ("0.0.0.0", "::") else host)
         self.routes = routes or self._build_default_routes()
+        self.acp_commands = {
+            name: AcpCommandSpec(name=name, **config) for name, config in ACP_COMMAND_DEFAULTS.items()
+        }
+        self.newgate_profile = load_newgate_profile()
         self.tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.RLock()
         self._base_url = f"http://{self.advertise_host}:{self.port}"
@@ -547,6 +718,18 @@ class LocalGeminiA2ABridge:
                     "inputModes": ["text"],
                     "outputModes": ["text"],
                 },
+                {
+                    "id": "newgate_system",
+                    "name": "Newgate System Context",
+                    "description": "Embedded Newgate architecture, roadmap, memory pipeline, and competition snapshot.",
+                    "tags": ["newgate", "memory", "roadmap", "embedding", "critic"],
+                    "examples": [
+                        "Show the Newgate roadmap.",
+                        "Compare Newgate with existing tools.",
+                    ],
+                    "inputModes": ["text"],
+                    "outputModes": ["text"],
+                },
             ],
             "supportsAuthenticatedExtendedCard": False,
         }
@@ -574,34 +757,72 @@ class LocalGeminiA2ABridge:
         return task
 
     def list_commands(self) -> Dict[str, Any]:
-        return {
-            "commands": [
+        commands = [
+            {
+                "name": "route-chat",
+                "description": "Pin a task to the conversation lane (8103 / Gemma 4).",
+                "arguments": [{"name": "taskId", "required": False}],
+                "subCommands": [],
+            },
+            {
+                "name": "route-agent",
+                "description": "Pin a task to the implementation lane (8102 / Qwen3 Coder Next).",
+                "arguments": [{"name": "taskId", "required": False}],
+                "subCommands": [],
+            },
+            {
+                "name": "route-utility",
+                "description": "Pin a task to the utility lane (8101 / Qwen3.5).",
+                "arguments": [{"name": "taskId", "required": False}],
+                "subCommands": [],
+            },
+            {
+                "name": "show-routes",
+                "description": "Show the currently configured local lane map.",
+                "arguments": [],
+                "subCommands": [],
+            },
+        ]
+        for spec in self.acp_commands.values():
+            commands.append(
                 {
-                    "name": "route-chat",
-                    "description": "Pin a task to the conversation lane (8103 / Gemma 4).",
-                    "arguments": [{"name": "taskId", "required": False}],
+                    "name": spec.name,
+                    "description": spec.description,
+                    "arguments": [
+                        {"name": "prompt", "required": True},
+                        {"name": "runtime", "required": False},
+                        {"name": "model", "required": False},
+                        {"name": "preset", "required": False},
+                        {"name": "timeout", "required": False},
+                    ],
                     "subCommands": [],
-                },
+                }
+            )
+        for name, config in NEWGATE_SECTION_COMMANDS.items():
+            commands.append(
                 {
-                    "name": "route-agent",
-                    "description": "Pin a task to the implementation lane (8102 / Qwen3 Coder Next).",
-                    "arguments": [{"name": "taskId", "required": False}],
-                    "subCommands": [],
-                },
-                {
-                    "name": "route-utility",
-                    "description": "Pin a task to the utility lane (8101 / Qwen3.5).",
-                    "arguments": [{"name": "taskId", "required": False}],
-                    "subCommands": [],
-                },
-                {
-                    "name": "show-routes",
-                    "description": "Show the currently configured local lane map.",
+                    "name": name,
+                    "description": config["description"],
                     "arguments": [],
                     "subCommands": [],
-                },
-            ]
-        }
+                }
+            )
+        for name, config in NEWGATE_ACP_COMMANDS.items():
+            commands.append(
+                {
+                    "name": name,
+                    "description": config["description"],
+                    "arguments": [
+                        {"name": "prompt", "required": True},
+                        {"name": "runtime", "required": False},
+                        {"name": "model", "required": False},
+                        {"name": "preset", "required": False},
+                        {"name": "timeout", "required": False},
+                    ],
+                    "subCommands": [],
+                }
+            )
+        return {"commands": commands}
 
     def execute_command(self, command: str, args: Optional[List[Any]] = None) -> Dict[str, Any]:
         args = list(args or [])
@@ -616,6 +837,12 @@ class LocalGeminiA2ABridge:
                     for route_id, route in self.routes.items()
                 }
             }
+        if command in self.acp_commands:
+            return self._execute_acp_command(self.acp_commands[command], args)
+        if command in NEWGATE_SECTION_COMMANDS:
+            return self._execute_newgate_section_command(command)
+        if command in NEWGATE_ACP_COMMANDS:
+            return self._execute_newgate_acp_command(command, args)
 
         route_id = {
             "route-chat": "conversation",
@@ -646,6 +873,228 @@ class LocalGeminiA2ABridge:
             "routeId": route_id,
             "label": self.routes[route_id].display_name,
         }
+
+    def newgate_snapshot(self) -> Dict[str, Any]:
+        profile = clone_json(self.newgate_profile)
+        return {
+            "bridge": {
+                "baseUrl": self._base_url,
+                "preferredTransport": "HTTP+JSON",
+                "routes": {
+                    route_id: {
+                        "label": route.display_name,
+                        "baseUrl": route.base_url,
+                        "model": route.model,
+                    }
+                    for route_id, route in self.routes.items()
+                },
+                "commands": [
+                    "newgate_status",
+                    "newgate_compare",
+                    "newgate_roadmap",
+                    "newgate_memory_pipeline",
+                    "newgate_deepthink",
+                    "newgate_deepsearch",
+                ],
+            },
+            "profile": profile,
+        }
+
+    def _execute_newgate_section_command(self, command: str) -> Dict[str, Any]:
+        snapshot = self.newgate_snapshot()
+        profile = snapshot["profile"]
+
+        if command == "newgate_status":
+            return {
+                "command": command,
+                "project": {
+                    "name": profile.get("name"),
+                    "version": profile.get("version"),
+                    "workspace": profile.get("workspace"),
+                },
+                "scale": profile.get("scale"),
+                "embedding": profile.get("embedding"),
+                "kiVectorization": profile.get("kiVectorization"),
+                "routing": profile.get("routing"),
+                "bridge": snapshot["bridge"],
+            }
+        if command == "newgate_compare":
+            return {
+                "command": command,
+                "competition": profile.get("competition"),
+                "validatedFacts": profile.get("validatedFacts"),
+            }
+        if command == "newgate_roadmap":
+            return {
+                "command": command,
+                "priorities": profile.get("priorities"),
+                "vision": profile.get("vision"),
+                "routing": profile.get("routing"),
+            }
+        if command == "newgate_memory_pipeline":
+            return {
+                "command": command,
+                "memory": profile.get("memory"),
+                "embedding": profile.get("embedding"),
+                "nextFocus": [
+                    "raw -> normalized 自動蒸留",
+                    "会話終了時の自動パケット化",
+                    "週次 8B 再ベクトル化",
+                ],
+            }
+        raise KeyError(command)
+
+    def _execute_newgate_acp_command(self, command: str, args: List[Any]) -> Dict[str, Any]:
+        config = NEWGATE_ACP_COMMANDS[command]
+        spec = self.acp_commands[config["spec"]]
+        options = self._normalize_acp_args(spec, args)
+        prompt_text = build_newgate_context(self.newgate_profile, config["focus"], options["prompt"])
+        payload = self._run_acp_command(spec, options, prompt_text, command_name=command, public_prompt=options["prompt"])
+        payload["newgateFocus"] = config["focus"]
+        payload["newgateVersion"] = self.newgate_profile.get("version")
+        return payload
+
+    def _execute_acp_command(self, spec: AcpCommandSpec, args: List[Any]) -> Dict[str, Any]:
+        options = self._normalize_acp_args(spec, args)
+        return self._run_acp_command(spec, options, options["prompt"])
+
+    def _run_acp_command(
+        self,
+        spec: AcpCommandSpec,
+        options: Dict[str, Any],
+        prompt_text: str,
+        command_name: Optional[str] = None,
+        public_prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        final_prompt = inject_pcc_prompt(
+            f"{spec.mode_prompt}\n---\n{prompt_text}",
+            options["preset"],
+        )
+        result = self._invoke_acp_cli(
+            runtime=options["runtime"],
+            prompt=final_prompt,
+            model=options["model"],
+            timeout=options["timeout"],
+        )
+        audit = audit_acp_response(result["text"])
+        return {
+            "command": command_name or spec.name,
+            "runtime": options["runtime"],
+            "model": options["model"],
+            "preset": options["preset"],
+            "timeout": options["timeout"],
+            "prompt": public_prompt if public_prompt is not None else options["prompt"],
+            "response": result["text"],
+            "audit": audit,
+            "exitCode": result["exit_code"],
+            "elapsed": result["elapsed"],
+            "invocation": result["command"],
+        }
+
+    def _normalize_acp_args(self, spec: AcpCommandSpec, args: List[Any]) -> Dict[str, Any]:
+        raw: Dict[str, Any]
+        if args and isinstance(args[0], dict):
+            raw = dict(args[0])
+        else:
+            raw = {
+                "prompt": args[0] if len(args) > 0 else "",
+                "runtime": args[1] if len(args) > 1 else None,
+                "model": args[2] if len(args) > 2 else None,
+                "preset": args[3] if len(args) > 3 else None,
+                "timeout": args[4] if len(args) > 4 else None,
+            }
+
+        prompt = str(raw.get("prompt") or "").strip()
+        if not prompt:
+            raise ValueError(f"{spec.name} requires a non-empty prompt.")
+
+        runtime = str(raw.get("runtime") or spec.default_runtime).strip().lower()
+        if runtime not in ACP_RUNTIME_MODELS:
+            raise ValueError(f"Unsupported runtime: {runtime}")
+
+        requested_model = str(raw.get("model") or spec.default_model).strip()
+        model = runtime_model(runtime, requested_model)
+        preset = str(raw.get("preset") or spec.default_preset).strip()
+        timeout = int(raw.get("timeout") or self.timeout_seconds)
+        if timeout <= 0:
+            raise ValueError("timeout must be greater than zero.")
+
+        return {
+            "prompt": prompt,
+            "runtime": runtime,
+            "model": model,
+            "preset": preset,
+            "timeout": timeout,
+        }
+
+    def _invoke_acp_cli(self, runtime: str, prompt: str, model: str, timeout: int) -> Dict[str, Any]:
+        env = os.environ.copy()
+        existing_path = env.get("PATH", "")
+        prepend = [directory for directory in CLI_SEARCH_DIRS if os.path.isdir(directory)]
+        if prepend:
+            env["PATH"] = ":".join(prepend + [existing_path]) if existing_path else ":".join(prepend)
+
+        binary_name = runtime
+        binary_path = shutil.which(binary_name, path=env.get("PATH"))
+        if not binary_path:
+            raise BackendError(f"{runtime} CLI is not installed or not on PATH.")
+
+        command = self._build_acp_command(binary_path, runtime, prompt, model)
+        started = time.monotonic()
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=os.getcwd(),
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise BackendError(f"{runtime} CLI timed out after {timeout}s.") from error
+
+        text = (result.stdout or "").strip()
+        if not text:
+            text = (result.stderr or "").strip()
+        if not text:
+            raise BackendError(f"{runtime} CLI returned no output.")
+        if result.returncode not in (0, 1):
+            raise BackendError(f"{runtime} CLI failed with exit code {result.returncode}: {text}")
+
+        return {
+            "text": text,
+            "exit_code": result.returncode,
+            "elapsed": round(time.monotonic() - started, 1),
+            "command": command,
+        }
+
+    def _build_acp_command(self, binary_path: str, runtime: str, prompt: str, model: str) -> List[str]:
+        if runtime == "gemini":
+            return [binary_path, "--approval-mode", "plan", "-p", prompt, "-m", model]
+        if runtime == "claude":
+            return [
+                binary_path,
+                "-p",
+                prompt,
+                "--permission-mode",
+                "plan",
+                "--output-format",
+                "text",
+                "--model",
+                model,
+            ]
+        if runtime == "copilot":
+            return [
+                binary_path,
+                "-p",
+                prompt,
+                "--plan",
+                "--output-format",
+                "text",
+                "--model",
+                model,
+            ]
+        raise BackendError(f"Unsupported runtime: {runtime}")
 
     def list_task_metadata(self) -> List[Dict[str, Any]]:
         with self._lock:
@@ -1140,6 +1589,9 @@ class GeminiA2ABridgeHandler(BaseHTTPRequestHandler):
             if path in ("/.well-known/agent-card.json", "/v1/card"):
                 self._send_json(HTTPStatus.OK, self.bridge.agent_card())
                 return
+            if path == "/newgate/profile":
+                self._send_json(HTTPStatus.OK, self.bridge.newgate_snapshot())
+                return
             if path == "/listCommands":
                 self._send_json(HTTPStatus.OK, self.bridge.list_commands())
                 return
@@ -1206,7 +1658,7 @@ class GeminiA2ABridgeHandler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Command not found: {command}"})
                     return
                 except ValueError as error:
-                    self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                     return
                 self._send_json(HTTPStatus.OK, result)
                 return

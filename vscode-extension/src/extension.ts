@@ -12,6 +12,80 @@ const FLEET_LOG_DIR = path.join(
   '.gemini/antigravity/fleet-logs'
 );
 
+interface NewgateStatus {
+  connected: boolean;
+  bridgeUrl: string;
+  version: string;
+  embeddingModel: string;
+  recallStatus: string;
+  storeStatus: string;
+  p0Count: number;
+  error?: string;
+  profile?: any;
+}
+
+function getBridgeUrl(): string {
+  const configured = vscode.workspace.getConfiguration().get<string>('geminicodeassist.a2a.address') ?? '';
+  return configured.trim().replace(/\/$/, '');
+}
+
+async function fetchNewgateStatus(): Promise<NewgateStatus> {
+  const bridgeUrl = getBridgeUrl();
+  if (!bridgeUrl) {
+    return {
+      connected: false,
+      bridgeUrl: '',
+      version: '-',
+      embeddingModel: '-',
+      recallStatus: 'unknown',
+      storeStatus: 'unknown',
+      p0Count: 0,
+      error: 'geminicodeassist.a2a.address が未設定',
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+
+  try {
+    const response = await (globalThis as any).fetch(`${bridgeUrl}/newgate/profile`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const snapshot = await response.json() as any;
+    const profile = snapshot?.profile ?? {};
+    const priorities = Array.isArray(profile.priorities) ? profile.priorities : [];
+
+    return {
+      connected: true,
+      bridgeUrl,
+      version: String(profile.version ?? '-'),
+      embeddingModel: String(profile.embedding?.primaryModel ?? '-'),
+      recallStatus: String(profile.memory?.recall?.status ?? 'unknown'),
+      storeStatus: String(profile.memory?.store?.status ?? 'unknown'),
+      p0Count: priorities.filter((item: any) => item?.priority === 'P0').length,
+      profile,
+    };
+  } catch (error: any) {
+    const message = error?.name === 'AbortError' ? 'bridge timeout' : (error?.message ?? 'bridge error');
+    return {
+      connected: false,
+      bridgeUrl,
+      version: '-',
+      embeddingModel: '-',
+      recallStatus: 'unknown',
+      storeStatus: 'unknown',
+      p0Count: 0,
+      error: message,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ── Resolve Script Paths ────────────────────────────────────────────────────
 
 function resolveCriticScript(context: vscode.ExtensionContext): string {
@@ -102,32 +176,35 @@ class VortexSidebarProvider implements vscode.WebviewViewProvider {
     this._view = webviewView;
     webviewView.webview.options = { enableScripts: true };
 
-    const updateWebview = () => {
+    const updateWebview = async () => {
       const status = {
         preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
-        lastVerdict: lastAuditResult?.verdict || null
+        lastVerdict: lastAuditResult?.verdict || null,
+        newgate: await fetchNewgateStatus(),
       };
       webviewView.webview.html = getDashboardHtml(this._extensionUri, FLEET_LOG_DIR, () => status);
     };
 
-    updateWebview();
+    void updateWebview();
 
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.command === 'refresh') {
-        updateWebview();
+        void updateWebview();
       } else if (msg.command === 'runAudit') {
         vscode.commands.executeCommand('vortex.runAudit');
+      } else if (msg.command === 'openNewgate') {
+        vscode.commands.executeCommand('vortex.openNewgateSnapshot');
       }
     });
   }
 
-  public refresh() {
+  public async refresh() {
     if (this._view) {
       this._view.webview.postMessage({ command: 'refresh' });
-      // Or fully reload HTML:
       const status = {
         preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
-        lastVerdict: lastAuditResult?.verdict || null
+        lastVerdict: lastAuditResult?.verdict || null,
+        newgate: await fetchNewgateStatus(),
       };
       this._view.webview.html = getDashboardHtml(this._extensionUri, FLEET_LOG_DIR, () => status);
     }
@@ -247,7 +324,7 @@ export function activate(context: vscode.ExtensionContext) {
         async () => {
           const result = await runVortexAudit(code, wsRoot, context);
           lastAuditResult = result;
-          sidebarProvider.refresh();
+          void sidebarProvider.refresh();
 
           const channel = vscode.window.createOutputChannel('VORTEX Critic');
           channel.clear();
@@ -284,7 +361,7 @@ export function activate(context: vscode.ExtensionContext) {
         async () => {
           const result = await runVortexAudit(code, wsRoot, context);
           lastAuditResult = result;
-          sidebarProvider.refresh();
+          void sidebarProvider.refresh();
 
           const channel = vscode.window.createOutputChannel('VORTEX Critic');
           channel.clear();
@@ -315,14 +392,23 @@ export function activate(context: vscode.ExtensionContext) {
         );
         if (confirm === 'Clear') {
           fs.unlinkSync(logFile);
-          sidebarProvider.refresh();
+          void sidebarProvider.refresh();
           vscode.window.showInformationMessage('Fleet logs cleared');
         }
       }
     }),
 
     vscode.commands.registerCommand('vortex.refreshSidebar', () => {
-      sidebarProvider.refresh();
+      void sidebarProvider.refresh();
+    }),
+
+    vscode.commands.registerCommand('vortex.openNewgateSnapshot', async () => {
+      const snapshot = await fetchNewgateStatus();
+      const doc = await vscode.workspace.openTextDocument({
+        language: 'json',
+        content: JSON.stringify(snapshot, null, 2),
+      });
+      await vscode.window.showTextDocument(doc, { preview: false });
     }),
 
     vscode.commands.registerCommand('vortex.switchPreset', async () => {
@@ -339,7 +425,7 @@ export function activate(context: vscode.ExtensionContext) {
       });
       if (pick) {
         await vscode.workspace.getConfiguration('vortex').update('preset', pick.value, true);
-        sidebarProvider.refresh();
+        void sidebarProvider.refresh();
         vscode.window.showInformationMessage(`PCC Preset: ${pick.label}`);
       }
     }),

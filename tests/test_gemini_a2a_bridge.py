@@ -153,7 +153,7 @@ def bridge_server(mock_backends):
         server.server_close()
 
 
-def test_agent_card_advertises_http_json_and_three_skills(bridge_server):
+def test_agent_card_advertises_http_json_and_newgate_skill(bridge_server):
     _, _, base_url = bridge_server
 
     status, _, payload = get_json(f"{base_url}/.well-known/agent-card.json")
@@ -161,7 +161,8 @@ def test_agent_card_advertises_http_json_and_three_skills(bridge_server):
     assert status == 200
     assert payload["preferredTransport"] == "HTTP+JSON"
     assert payload["additionalInterfaces"][0]["transport"] == "JSONRPC"
-    assert len(payload["skills"]) == 3
+    assert len(payload["skills"]) == 4
+    assert any(skill["id"] == "newgate_system" for skill in payload["skills"])
 
 
 def test_rest_message_send_defaults_to_conversation_lane(bridge_server, mock_backends):
@@ -273,3 +274,111 @@ def test_jsonrpc_message_send_returns_normalized_task_shape(bridge_server, mock_
     assert payload["result"]["kind"] == "task"
     assert payload["result"]["status"]["state"] == "completed"
     assert len(mock_backends["conversation"].requests) == 1
+
+
+def test_list_commands_includes_acp_commands(bridge_server):
+    _, _, base_url = bridge_server
+
+    status, _, payload = get_json(f"{base_url}/listCommands")
+
+    names = {command["name"] for command in payload["commands"]}
+    assert status == 200
+    assert "acp_deepthink" in names
+    assert "acp_deepsearch" in names
+    assert "newgate_status" in names
+    assert "newgate_deepthink" in names
+
+
+def test_execute_command_runs_acp_deepthink_with_audit(bridge_server):
+    bridge, _, base_url = bridge_server
+    seen = {}
+
+    def fake_invoke(runtime, prompt, model, timeout):
+        seen.update({"runtime": runtime, "prompt": prompt, "model": model, "timeout": timeout})
+        return {
+            "text": "However this design has a risk because the fallback path is missing. Specifically the failure mode is undocumented.",
+            "exit_code": 0,
+            "elapsed": 0.4,
+            "command": ["fake-cli", runtime],
+        }
+
+    bridge._invoke_acp_cli = fake_invoke  # type: ignore[method-assign]
+
+    status, _, payload = post_json(
+        f"{base_url}/executeCommand",
+        {
+            "command": "acp_deepthink",
+            "args": [
+                {
+                    "prompt": "この設計の穴を洗い出して",
+                    "runtime": "claude",
+                    "model": "sonnet",
+                    "timeout": 33,
+                }
+            ],
+        },
+    )
+
+    assert status == 200
+    assert payload["command"] == "acp_deepthink"
+    assert payload["runtime"] == "claude"
+    assert payload["model"] == "sonnet"
+    assert payload["preset"] == "刃"
+    assert payload["audit"]["verdict"] == "PASS"
+    assert seen["runtime"] == "claude"
+    assert seen["model"] == "sonnet"
+    assert seen["timeout"] == 33
+    assert "PCC Protocol" in seen["prompt"]
+    assert "ACP DEEPTHINK" in seen["prompt"]
+
+
+def test_newgate_profile_endpoint_exposes_embedding_and_bridge_commands(bridge_server):
+    _, _, base_url = bridge_server
+
+    status, _, payload = get_json(f"{base_url}/newgate/profile")
+
+    assert status == 200
+    assert payload["profile"]["embedding"]["primaryModel"] == "qwen3-embedding-8b"
+    assert "newgate_deepsearch" in payload["bridge"]["commands"]
+
+
+def test_execute_command_runs_newgate_deepsearch_with_embedded_context(bridge_server):
+    bridge, _, base_url = bridge_server
+    seen = {}
+
+    def fake_invoke(runtime, prompt, model, timeout):
+        seen.update({"runtime": runtime, "prompt": prompt, "model": model, "timeout": timeout})
+        return {
+            "text": "However this pipeline has a weakness because store-side packetization is still pending. Specifically evidence is missing for automated normalization.",
+            "exit_code": 0,
+            "elapsed": 0.6,
+            "command": ["fake-cli", runtime],
+        }
+
+    bridge._invoke_acp_cli = fake_invoke  # type: ignore[method-assign]
+
+    status, _, payload = post_json(
+        f"{base_url}/executeCommand",
+        {
+            "command": "newgate_deepsearch",
+            "args": [
+                {
+                    "prompt": "file-first memory pipeline の弱点を洗って",
+                    "runtime": "gemini",
+                    "model": "standard",
+                    "timeout": 21,
+                }
+            ],
+        },
+    )
+
+    assert status == 200
+    assert payload["command"] == "newgate_deepsearch"
+    assert payload["newgateFocus"] == "research"
+    assert payload["newgateVersion"] == "2.1"
+    assert payload["audit"]["verdict"] == "PASS"
+    assert seen["runtime"] == "gemini"
+    assert seen["model"] == "gemini-2.5-pro"
+    assert seen["timeout"] == 21
+    assert "[Newgate Context]" in seen["prompt"]
+    assert "qwen3-embedding-8b" in seen["prompt"]
