@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PCC Delegation Report",
+  "description": "Structured report from AI critic after reviewing task output",
+  "type": "object",
+  "required": ["report_id", "task_id", "verdict", "decision", "confidence", "reasoning", "timestamp"],
+  "properties": {
+    "report_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]+$"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]+$"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "REVIEW", "NEEDS_EVIDENCE", "NO_OP", "SYCOPHANTIC", "FAIL"],
+      "description": "6-level verdict classification"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["allow", "review", "reject", "retry"],
+      "description": "Action to take based on verdict"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Specific evidence supporting the verdict"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 10
+    },
+    "issues_found": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["critical", "major", "minor", "info"] },
+          "description": { "type": "string" },
+          "location": { "type": "string" }
+        },
+        "required": ["severity", "description"]
+      }
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

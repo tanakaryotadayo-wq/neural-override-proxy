@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neural-override.dev/schemas/controller-ledger.json",
+  "title": "Controller Ledger Schema",
+  "description": "Schema for the Neural Override Controller Ledger system",
+  "type": "object",
+  "required": ["version", "workspaces"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Schema version for future compatibility"
+    },
+    "workspaces": {
+      "type": "object",
+      "description": "Dictionary of workspace entries keyed by workspace name",
+      "patternProperties": {
+        ".*": {
+          "$ref": "#/$defs/LedgerEntry"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "LedgerEntry": {
+      "type": "object",
+      "description": "Individual workspace session entry",
+      "required": [
+        "workspace_name",
+        "workspace_path",
+        "session_status",
+        "chosen_runtime",
+        "report_paths",
+        "jules_job_ids",
+        "updated_at"
+      ],
+      "properties": {
+        "workspace_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable name of the workspace"
+        },
+        "workspace_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filesystem path to the workspace directory"
+        },
+        "session_status": {
+          "type": "string",
+          "enum": ["running", "stopped", "unknown"],
+          "description": "Current status of the workspace session"
+        },
+        "chosen_runtime": {
+          "type": "string",
+          "enum": ["gemini-acp", "jules", "qwen", "unknown"],
+          "description": "Selected AI runtime for this workspace"
+        },
+        "acp_session_id": {
+          "type": ["string", "null"],
+          "description": "ACP session identifier if using gemini-acp runtime"
+        },
+        "report_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of paths to generated reports"
+        },
+        "jules_job_ids": {
+          "type": "array", 
+          "items": {
+            "type": "string"
+          },
+          "description": "List of Jules job identifiers"
+        },
+        "last_active_file": {
+          "type": ["string", "null"],
+          "description": "Path to the most recently active file in workspace"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of last update"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

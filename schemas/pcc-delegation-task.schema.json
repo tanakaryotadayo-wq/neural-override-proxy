@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PCC Delegation Task",
+  "description": "Structured task definition for AI agent delegation via PCC protocol",
+  "type": "object",
+  "required": [
+    "task_id", "title", "role", "runtime", "preset", "model",
+    "objective", "success_criteria"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "description": "Unique task identifier"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "role": {
+      "type": "string",
+      "enum": ["reviewer", "implementer", "tester", "architect", "auditor"]
+    },
+    "runtime": {
+      "type": "string",
+      "enum": ["gemini", "claude", "jules", "qwen", "copilot"]
+    },
+    "preset": {
+      "type": "string",
+      "enum": ["探", "極", "均", "監", "刃"]
+    },
+    "model": {
+      "type": "string",
+      "description": "Specific model identifier (e.g. claude-opus-4.6, gemini-3.1-pro)"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Clear description of what the task must accomplish"
+    },
+    "context": {
+      "type": "string",
+      "description": "Background information and relevant file paths"
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Hard constraints the output must satisfy"
+    },
+    "required_evidence": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Evidence that must be present in the output to prove completion"
+    },
+    "success_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Measurable criteria for task acceptance"
+    },
+    "artifacts_expected": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "File paths or artifact names expected as output"
+    },
+    "dispatch_gate": {
+      "type": "object",
+      "properties": {
+        "max_retries": { "type": "integer", "minimum": 0, "maximum": 10, "default": 3 },
+        "timeout_seconds": { "type": "integer", "minimum": 30, "maximum": 3600, "default": 300 }
+      }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Actions to take after task completion"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Task IDs this task depends on"
+    }
+  },
+  "additionalProperties": false
+}

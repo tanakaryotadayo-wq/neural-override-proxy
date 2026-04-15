@@ -69,3 +69,87 @@
   ✅ done (10 lines)
   ⏳ sleeping 15s...
   ▶ PCC #探 → 探_20260415_150134.md
+  ⚠ gemini error
+  ✅ done (1055 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_150616.md
+  ✅ done (5 lines)
+  ⏳ sleeping 15s...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 gemini-cli (fork)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 0KB
+  ▶ PCC #監 → 監_20260415_150657.md
+  ✅ done (484 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_150923.md
+  ✅ done (815 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_151221.md
+  ✅ done (3148 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_152637.md
+  ⚠ gemini error
+  ✅ done (1170 lines)
+  ⏳ sleeping 15s...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 vscode-dotnet-runtime (fork)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 0KB
+  ▶ PCC #監 → 監_20260415_153130.md
+  ⚠ gemini error
+  ✅ done (2552 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_154111.md
+  ⚠ gemini error
+  ✅ done (1055 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_154528.md
+  ⚠ gemini error
+  ✅ done (1055 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_154942.md
+  ✅ done (120 lines)
+  ⏳ sleeping 15s...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 n8n-docs (fork)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 0KB
+  ▶ PCC #監 → 監_20260415_155112.md
+  ✅ done (711 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_155417.md
+  ✅ done (469 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_155602.md
+  ✅ done (20 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_155714.md
+  ✅ done (5 lines)
+  ⏳ sleeping 15s...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 nvm (fork)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 2KB
+  ▶ PCC #監 → 監_20260415_155752.md
+  ✅ done (362 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_155920.md
+  ✅ done (830 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_160205.md
+  ✅ done (273 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_160319.md
+  ✅ done (234 lines)
+  ⏳ sleeping 15s...
+
+╔══════════════════════════════════════════════════╗
+║  ✅ Complete                                    ║
+║  Calls: 32  Skipped: 0                          ║
+║  Reports: /Users/ryyota/neural-override-proxy/audit-reports  ║
+╚══════════════════════════════════════════════════╝
