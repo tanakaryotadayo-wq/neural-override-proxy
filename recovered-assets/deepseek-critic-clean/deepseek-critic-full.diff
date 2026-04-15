@@ -1,0 +1,1121 @@
+diff --git a/assets/hooks/deepseek-critic.config.json b/assets/hooks/deepseek-critic.config.json
+new file mode 100644
+index 00000000..16f4bed9
+--- /dev/null
++++ b/assets/hooks/deepseek-critic.config.json
+@@ -0,0 +1,25 @@
++{
++  "enabled": true,
++  "provider": "deepseek",
++  "model": "deepseek-chat",
++  "preset": "刃",
++  "baseUrl": "https://api.deepseek.com/chat/completions",
++  "keychainService": "deepseek-api",
++  "keychainAccount": "default",
++  "fallbackKeychainServices": [
++    "deepseek-api",
++    "deepseek",
++    "DeepSeek API"
++  ],
++  "maxTokens": 900,
++  "temperature": 0.2,
++  "promptContextChars": 12000,
++  "responseChars": 3200,
++  "styleNote": "Return critique in Japanese. Be dense, concrete, and useful.",
++  "focusAreas": [
++    "implementation gaps",
++    "missing evidence",
++    "next concrete patch",
++    "test and verification blind spots"
++  ]
++}
+diff --git a/assets/hooks/deepseek-critic.py b/assets/hooks/deepseek-critic.py
+new file mode 100644
+index 00000000..8a55158b
+--- /dev/null
++++ b/assets/hooks/deepseek-critic.py
+@@ -0,0 +1,287 @@
++#!/usr/bin/env python3
++"""
++deepseek-critic.py
++
++Read-only critic hook for VS Code Copilot Chat.
++It reads stdin JSON shaped like { "prompt": "..." } and returns a hook-compatible
++JSON payload with hookSpecificOutput.additionalContext.
++
++The script is designed to be used in two ways:
++1. As a visible workspace artifact under `.copilot/hooks/`
++2. As an auto-injected critic lane called by the extension itself
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import subprocess
++import sys
++import urllib.error
++import urllib.request
++from pathlib import Path
++from typing import Any
++
++
++PCC_PRESETS = {
++    "探": {
++        "label": "#探",
++        "constraints": [
++            "Challenge assumptions and look for specific weaknesses.",
++            "Do not be agreeable for its own sake.",
++            "Prefer concrete risks over vague criticism.",
++            "If something is uncertain, mark it as an assumption.",
++        ],
++    },
++    "極": {
++        "label": "#極",
++        "constraints": [
++            "Be concise and structured.",
++            "Answer only what is useful for moving the task forward.",
++            "Avoid filler and social niceties.",
++        ],
++    },
++    "均": {
++        "label": "#均",
++        "constraints": [
++            "Balance strengths and weaknesses.",
++            "Pair each weakness with one practical improvement.",
++        ],
++    },
++    "監": {
++        "label": "#監",
++        "constraints": [
++            "Judge based on evidence and likely verification needs.",
++            "Ignore self-reports of success if they lack support.",
++            "Call out missing evidence explicitly.",
++        ],
++    },
++    "刃": {
++        "label": "#刃",
++        "constraints": [
++            "Behave like a strict implementation reviewer.",
++            "Prefer concrete change plans over abstract commentary.",
++            "Recommend the safest next step with reasons.",
++        ],
++    },
++}
++
++
++DEFAULT_CONFIG = {
++    "enabled": True,
++    "provider": "deepseek",
++    "model": "deepseek-chat",
++    "preset": "刃",
++    "baseUrl": "https://api.deepseek.com/chat/completions",
++    "keychainService": "deepseek-api",
++    "keychainAccount": "default",
++    "fallbackKeychainServices": ["deepseek-api", "deepseek", "DeepSeek API"],
++    "maxTokens": 900,
++    "temperature": 0.2,
++    "promptContextChars": 12000,
++    "responseChars": 3200,
++    "styleNote": "Return critique in Japanese. Be dense, concrete, and useful.",
++    "focusAreas": [
++        "implementation gaps",
++        "missing evidence",
++        "next concrete patch",
++        "test and verification blind spots",
++    ],
++}
++
++
++def load_config() -> dict[str, Any]:
++    config_path = Path(__file__).with_name("deepseek-critic.config.json")
++    if not config_path.exists():
++        return dict(DEFAULT_CONFIG)
++
++    try:
++        data = json.loads(config_path.read_text(encoding="utf-8"))
++        merged = dict(DEFAULT_CONFIG)
++        merged.update(data)
++        return merged
++    except Exception:
++        print("DeepSeek critic runtime config JSON is invalid.", file=sys.stderr)
++        return dict(DEFAULT_CONFIG)
++
++
++def read_stdin_json() -> dict[str, Any]:
++    raw = sys.stdin.read().strip()
++    if not raw:
++        return {}
++    try:
++        data = json.loads(raw)
++        return data if isinstance(data, dict) else {}
++    except Exception:
++        return {"prompt": raw}
++
++
++def read_keychain_secret(service: str, account: str | None) -> str | None:
++    base = ["security", "find-generic-password", "-w", "-s", service]
++    variants = []
++    if account:
++        variants.append(base + ["-a", account])
++    variants.append(base)
++
++    for cmd in variants:
++        try:
++            proc = subprocess.run(
++                cmd,
++                capture_output=True,
++                text=True,
++                timeout=4,
++                check=False,
++            )
++            if proc.returncode == 0 and proc.stdout.strip():
++                return proc.stdout.strip()
++        except Exception:
++            continue
++    return None
++
++
++def resolve_api_key(config: dict[str, Any]) -> str | None:
++    env_key = os.environ.get("DEEPSEEK_API_KEY")
++    if env_key:
++        return env_key
++
++    service = config.get("keychainService")
++    account = config.get("keychainAccount")
++    if isinstance(service, str) and service:
++        secret = read_keychain_secret(service, account if isinstance(account, str) else None)
++        if secret:
++            return secret
++
++    for fallback_service in config.get("fallbackKeychainServices", []):
++        if not isinstance(fallback_service, str):
++            continue
++        secret = read_keychain_secret(fallback_service, account if isinstance(account, str) else None)
++        if secret:
++            return secret
++
++    return None
++
++
++def build_messages(data: dict[str, Any], config: dict[str, Any]) -> list[dict[str, str]]:
++    preset_name = config.get("preset", "監")
++    preset = PCC_PRESETS.get(preset_name, PCC_PRESETS["監"])
++    constraints = "\n".join(f"- {item}" for item in preset["constraints"])
++    style_note = config.get("styleNote", DEFAULT_CONFIG["styleNote"])
++    focus_areas = "\n".join(f"- {item}" for item in config.get("focusAreas", []))
++    prompt = str(data.get("prompt", ""))
++    active_file = data.get("activeFile")
++    workspace_root = data.get("workspaceRoot")
++
++    system_prompt = (
++        f"[PCC Protocol: {preset['label']}]\n"
++        "You are a read-only critic for another coding agent.\n"
++        "You do not implement the task. You only improve the next turn.\n"
++        "Constraints:\n"
++        f"{constraints}\n"
++        f"- {style_note}\n"
++        "- Focus on: likely flaws, missing evidence, and the single best next step.\n"
++        "- Keep the answer short enough to inject as additional context.\n"
++        f"{focus_areas and ('- Extra focus areas:\\n' + focus_areas + '\\n')}"
++        "Output format:\n"
++        "1. Risks\n"
++        "2. Missing evidence\n"
++        "3. Next step\n"
++        "4. Optional verifier\n"
++    )
++
++    context_lines = []
++    if isinstance(active_file, str) and active_file:
++        context_lines.append(f"Active file: {active_file}")
++    if isinstance(workspace_root, str) and workspace_root:
++        context_lines.append(f"Workspace root: {workspace_root}")
++
++    context_block = "\n".join(context_lines)
++    if context_block:
++        context_block = f"Known local context:\n{context_block}\n\n"
++
++    user_prompt = (
++        "Review the following Copilot Chat user request as a critic lane.\n"
++        "Do not answer the request directly. Produce only critique and next-step guidance.\n\n"
++        f"{context_block}"
++        f"{prompt[: int(config.get('promptContextChars', DEFAULT_CONFIG['promptContextChars']))]}"
++    )
++
++    return [
++        {"role": "system", "content": system_prompt},
++        {"role": "user", "content": user_prompt},
++    ]
++
++
++def call_deepseek(messages: list[dict[str, str]], config: dict[str, Any], api_key: str) -> str | None:
++    payload = {
++        "model": config.get("model", DEFAULT_CONFIG["model"]),
++        "messages": messages,
++        "temperature": config.get("temperature", DEFAULT_CONFIG["temperature"]),
++        "max_tokens": config.get("maxTokens", DEFAULT_CONFIG["maxTokens"]),
++        "stream": False,
++    }
++    request = urllib.request.Request(
++        config.get("baseUrl", DEFAULT_CONFIG["baseUrl"]),
++        data=json.dumps(payload).encode("utf-8"),
++        headers={
++            "Authorization": f"Bearer {api_key}",
++            "Content-Type": "application/json",
++        },
++        method="POST",
++    )
++    try:
++        with urllib.request.urlopen(request, timeout=20) as response:
++            body = json.loads(response.read().decode("utf-8"))
++    except urllib.error.HTTPError as exc:
++        return f"DeepSeek critic failed with HTTP {exc.code}."
++    except Exception:
++        return None
++
++    try:
++        text = body["choices"][0]["message"]["content"]
++    except Exception:
++        return None
++
++    if not isinstance(text, str):
++        return None
++    return text[: int(config.get("responseChars", DEFAULT_CONFIG["responseChars"]))]
++
++
++def emit(additional_context: str | None) -> int:
++    payload = {
++        "hookSpecificOutput": {
++            "hookEventName": "UserPromptSubmit",
++        }
++    }
++    if additional_context:
++        payload["hookSpecificOutput"]["additionalContext"] = additional_context
++    print(json.dumps(payload, ensure_ascii=False))
++    return 0
++
++
++def main() -> int:
++    config = load_config()
++    if not config.get("enabled", True):
++        return emit(None)
++
++    data = read_stdin_json()
++    prompt = data.get("prompt")
++    if not isinstance(prompt, str) or not prompt.strip():
++        return emit(None)
++
++    api_key = resolve_api_key(config)
++    if not api_key:
++        print("DeepSeek API key missing.", file=sys.stderr)
++        return emit(None)
++
++    messages = build_messages(data, config)
++    response = call_deepseek(messages, config, api_key)
++    if not response:
++        print("DeepSeek critic returned no response.", file=sys.stderr)
++        return emit(None)
++
++    additional_context = f"[DeepSeek Critic]\n{response.strip()}"
++    return emit(additional_context)
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/package.json b/package.json
+index 89a00915..7f47f610 100644
+--- a/package.json
++++ b/package.json
+@@ -2123,6 +2123,16 @@
+ 			}
+ 		],
+ 		"commands": [
++			{
++				"command": "github.copilot.chat.deepseekCritic.manage",
++				"title": "DeepSeek Critic Hook",
++				"category": "Copilot Chat"
++			},
++			{
++				"command": "github.copilot.chat.deepseekCritic.install",
++				"title": "Install DeepSeek Critic Hook",
++				"category": "Copilot Chat"
++			},
+ 			{
+ 				"command": "github.copilot.chat.triggerPermissiveSignIn",
+ 				"title": "%github.copilot.command.triggerPermissiveSignIn%"
+@@ -4732,6 +4742,11 @@
+ 						"tags": [
+ 							"advanced"
+ 						]
++					},
++					"github.copilot.chat.deepseekCritic.enabled": {
++						"type": "boolean",
++						"default": true,
++						"description": "Enable the workspace DeepSeek critic hook integration for read-only critique context."
+ 					}
+ 				}
+ 			}
+@@ -5296,6 +5311,11 @@
+ 					"command": "github.copilot.debug.showChatLogView",
+ 					"when": "view == workbench.panel.chat.view.copilot",
+ 					"group": "3_show"
++				},
++				{
++					"command": "github.copilot.chat.deepseekCritic.manage",
++					"when": "view == copilot-chat || view == workbench.panel.chat.view.copilot",
++					"group": "3_show@2"
+ 				}
+ 			],
+ 			"view/item/context": [
+diff --git a/src/extension/conversation/vscode-node/deepSeekCriticContribution.ts b/src/extension/conversation/vscode-node/deepSeekCriticContribution.ts
+new file mode 100644
+index 00000000..9f2c6eb5
+--- /dev/null
++++ b/src/extension/conversation/vscode-node/deepSeekCriticContribution.ts
+@@ -0,0 +1,236 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import * as vscode from 'vscode';
++import { existsSync, promises as fs } from 'fs';
++import { ILogService } from '../../../platform/log/common/logService';
++import { IExtensionContribution } from '../../common/contributions';
++import { Disposable } from '../../../util/vs/base/common/lifecycle';
++import { configureWorkspaceDeepSeekCriticApi, inspectWorkspaceDeepSeekCriticHook, isWorkspaceDeepSeekCriticEnabled } from '../../prompt/node/workspaceDeepSeekCriticHook';
++
++const INSTALL_COMMAND = 'github.copilot.chat.deepseekCritic.install';
++const MANAGE_COMMAND = 'github.copilot.chat.deepseekCritic.manage';
++const HOOKS_DIR = '.copilot/hooks';
++const HOOK_SCRIPT_NAME = 'deepseek-critic.py';
++const HOOK_CONFIG_NAME = 'deepseek-critic.json';
++const HOOK_RUNTIME_CONFIG_NAME = 'deepseek-critic.config.json';
++
++export class DeepSeekCriticContribution extends Disposable implements IExtensionContribution {
++	readonly id = 'deepseekCriticContribution';
++	private readonly statusBarItem: vscode.StatusBarItem;
++
++	constructor(
++		@ILogService private readonly logService: ILogService,
++	) {
++		super();
++		configureWorkspaceDeepSeekCriticApi(vscode.workspace);
++		this.statusBarItem = this._register(vscode.window.createStatusBarItem('github.copilot.chat.deepseekCritic', vscode.StatusBarAlignment.Right, 910));
++
++		this._register(vscode.commands.registerCommand(INSTALL_COMMAND, async () => {
++			await this.installWorkspaceHook(await this.pickWorkspaceFolder());
++		}));
++		this._register(vscode.commands.registerCommand(MANAGE_COMMAND, async () => {
++			await this.manageWorkspaceHook(await this.pickWorkspaceFolder());
++		}));
++		this._register(vscode.workspace.onDidChangeWorkspaceFolders(() => this.updateStatusBar()));
++		this._register(vscode.window.onDidChangeActiveTextEditor(() => this.updateStatusBar()));
++		this._register(vscode.workspace.onDidChangeConfiguration(event => {
++			if (event.affectsConfiguration('github.copilot.chat.deepseekCritic.enabled')) {
++				this.updateStatusBar();
++			}
++		}));
++		for (const pattern of ['**/.copilot/hooks/deepseek-critic.json', '**/.copilot/hooks/deepseek-critic.config.json', '**/.copilot/hooks/deepseek-critic.py']) {
++			const watcher = this._register(vscode.workspace.createFileSystemWatcher(pattern));
++			this._register(watcher.onDidCreate(() => this.updateStatusBar()));
++			this._register(watcher.onDidChange(() => this.updateStatusBar()));
++			this._register(watcher.onDidDelete(() => this.updateStatusBar()));
++		}
++		this.updateStatusBar();
++	}
++
++	private async installWorkspaceHook(workspaceFolder: vscode.WorkspaceFolder | undefined): Promise<void> {
++		if (!workspaceFolder) {
++			void vscode.window.showWarningMessage('Open a workspace folder first to install the DeepSeek critic hook.');
++			return;
++		}
++
++		const extension = vscode.extensions.getExtension('GitHub.copilot-chat') ?? vscode.extensions.getExtension('github.copilot-chat');
++		if (!extension) {
++			void vscode.window.showErrorMessage('Could not resolve the Copilot Chat extension assets.');
++			return;
++		}
++
++		const { hooksDir, scriptUri, configUri, hookUri } = this.getHookUris(workspaceFolder);
++		await vscode.workspace.fs.createDirectory(hooksDir);
++
++		const assetScriptUri = vscode.Uri.joinPath(extension.extensionUri, 'assets', 'hooks', HOOK_SCRIPT_NAME);
++		const assetConfigUri = vscode.Uri.joinPath(extension.extensionUri, 'assets', 'hooks', HOOK_RUNTIME_CONFIG_NAME);
++
++		const [scriptTemplate, configTemplate] = await Promise.all([
++			vscode.workspace.fs.readFile(assetScriptUri),
++			vscode.workspace.fs.readFile(assetConfigUri),
++		]);
++
++		await Promise.all([
++			vscode.workspace.fs.writeFile(scriptUri, scriptTemplate),
++			vscode.workspace.fs.writeFile(configUri, configTemplate),
++		]);
++
++		const hookJson = {
++			hooks: {
++				UserPromptSubmit: [
++					{
++						matcher: '*',
++						hooks: [
++							{
++								type: 'command',
++								command: JSON.stringify(scriptUri.fsPath),
++							},
++						],
++					},
++				],
++			},
++		};
++		await vscode.workspace.fs.writeFile(hookUri, Buffer.from(JSON.stringify(hookJson, null, 2), 'utf8'));
++
++		await makeExecutable(scriptUri.fsPath, this.logService);
++		this.updateStatusBar();
++
++		const openChoice = 'Open config';
++		const openHookChoice = 'Open hook';
++		const choice = await vscode.window.showInformationMessage(
++			'DeepSeek critic hook installed. It will now be auto-detected by this workspace when present.',
++			openChoice,
++			openHookChoice,
++		);
++
++		if (choice === openChoice) {
++			await vscode.window.showTextDocument(configUri);
++		} else if (choice === openHookChoice) {
++			await vscode.window.showTextDocument(hookUri);
++		}
++	}
++
++	private async manageWorkspaceHook(workspaceFolder: vscode.WorkspaceFolder | undefined): Promise<void> {
++		if (!workspaceFolder) {
++			void vscode.window.showWarningMessage('Open a workspace folder first to manage the DeepSeek critic hook.');
++			return;
++		}
++
++		if (!this.isWorkspaceHookInstalled(workspaceFolder)) {
++			await this.installWorkspaceHook(workspaceFolder);
++			return;
++		}
++
++		const { scriptUri, configUri, hookUri } = this.getHookUris(workspaceFolder);
++		const choice = await vscode.window.showQuickPick([
++			{ label: 'Open config', uri: configUri },
++			{ label: 'Open hook JSON', uri: hookUri },
++			{ label: 'Open critic script', uri: scriptUri },
++			{ label: 'Reinstall from extension assets', uri: undefined as vscode.Uri | undefined, reinstall: true },
++		], {
++			title: 'DeepSeek Critic',
++			placeHolder: 'Choose what to open or refresh',
++		});
++
++		if (!choice) {
++			return;
++		}
++
++		if (choice.reinstall) {
++			await this.installWorkspaceHook(workspaceFolder);
++			return;
++		}
++
++		if (choice.uri) {
++			await vscode.window.showTextDocument(choice.uri);
++		}
++	}
++
++	private getWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
++		const activeEditor = vscode.window.activeTextEditor;
++		if (activeEditor) {
++			return vscode.workspace.getWorkspaceFolder(activeEditor.document.uri) ?? vscode.workspace.workspaceFolders?.[0];
++		}
++		return vscode.workspace.workspaceFolders?.[0];
++	}
++
++	private async pickWorkspaceFolder(): Promise<vscode.WorkspaceFolder | undefined> {
++		const preferred = this.getWorkspaceFolder();
++		const folders = vscode.workspace.workspaceFolders ?? [];
++		if (preferred || folders.length <= 1) {
++			return preferred ?? folders[0];
++		}
++
++		const choice = await vscode.window.showWorkspaceFolderPick({
++			placeHolder: 'Select the workspace folder for the DeepSeek critic hook',
++		});
++		return choice ?? preferred;
++	}
++
++	private getHookUris(workspaceFolder: vscode.WorkspaceFolder) {
++		const hooksDir = vscode.Uri.joinPath(workspaceFolder.uri, HOOKS_DIR);
++		return {
++			hooksDir,
++			scriptUri: vscode.Uri.joinPath(hooksDir, HOOK_SCRIPT_NAME),
++			configUri: vscode.Uri.joinPath(hooksDir, HOOK_RUNTIME_CONFIG_NAME),
++			hookUri: vscode.Uri.joinPath(hooksDir, HOOK_CONFIG_NAME),
++		};
++	}
++
++	private isWorkspaceHookInstalled(workspaceFolder: vscode.WorkspaceFolder): boolean {
++		const { scriptUri, configUri, hookUri } = this.getHookUris(workspaceFolder);
++		return existsSync(scriptUri.fsPath) && existsSync(configUri.fsPath) && existsSync(hookUri.fsPath);
++	}
++
++	private updateStatusBar(): void {
++		void this.updateStatusBarAsync();
++	}
++
++	private async updateStatusBarAsync(): Promise<void> {
++		if (!isWorkspaceDeepSeekCriticEnabled()) {
++			this.statusBarItem.hide();
++			return;
++		}
++
++		const workspaceFolder = this.getWorkspaceFolder();
++		if (!workspaceFolder) {
++			this.statusBarItem.hide();
++			return;
++		}
++
++		const inspection = await inspectWorkspaceDeepSeekCriticHook(workspaceFolder.uri);
++		this.statusBarItem.command = { command: MANAGE_COMMAND, title: 'Manage DeepSeek Critic Hook' };
++
++		if (!inspection.installed) {
++			this.statusBarItem.text = '$(tools) Install Critic';
++			this.statusBarItem.tooltip = 'Install the DeepSeek critic hook into this workspace so Copilot Chat can receive critic context automatically.';
++			this.statusBarItem.backgroundColor = undefined;
++			this.statusBarItem.show();
++			return;
++		}
++
++		if (inspection.issue) {
++			this.statusBarItem.text = '$(warning) Critic Issue';
++			this.statusBarItem.tooltip = `${inspection.issue.message} Click to inspect or reinstall the DeepSeek critic hook.`;
++			this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
++			this.statusBarItem.show();
++			return;
++		}
++
++		this.statusBarItem.text = '$(hubot) DeepSeek Critic';
++		this.statusBarItem.tooltip = 'DeepSeek critic hook is installed for this workspace. Click to open or refresh it.';
++		this.statusBarItem.backgroundColor = undefined;
++		this.statusBarItem.show();
++	}
++}
++
++async function makeExecutable(path: string, logService: ILogService): Promise<void> {
++	try {
++		await fs.chmod(path, 0o755);
++	} catch (error) {
++		logService.debug(`[DeepSeekCriticContribution] Failed to chmod hook script: ${String(error)}`);
++	}
++}
+diff --git a/src/extension/extension/vscode-node/contributions.ts b/src/extension/extension/vscode-node/contributions.ts
+index c02806ac..96f142fd 100644
+--- a/src/extension/extension/vscode-node/contributions.ts
++++ b/src/extension/extension/vscode-node/contributions.ts
+@@ -17,6 +17,7 @@ import { ConfigurationMigrationContribution } from '../../configuration/vscode-n
+ import { ContextKeysContribution } from '../../contextKeys/vscode-node/contextKeys.contribution';
+ import { AiMappedEditsContrib } from '../../conversation/vscode-node/aiMappedEditsContrib';
+ import { ConversationFeature } from '../../conversation/vscode-node/conversationFeature';
++import { DeepSeekCriticContribution } from '../../conversation/vscode-node/deepSeekCriticContribution';
+ import { FeedbackCommandContribution } from '../../conversation/vscode-node/feedbackContribution';
+ import { LanguageModelAccess } from '../../conversation/vscode-node/languageModelAccess';
+ import { LogWorkspaceStateContribution } from '../../conversation/vscode-node/logWorkspaceState';
+@@ -74,6 +75,7 @@ export const vscodeNodeContributions: IExtensionContributionFactory[] = [
+ 	asContributionFactory(ContextKeysContribution),
+ 	asContributionFactory(CopilotDebugCommandContribution),
+ 	asContributionFactory(DebugCommandsContribution),
++	asContributionFactory(DeepSeekCriticContribution),
+ 	asContributionFactory(LanguageModelAccess),
+ 	asContributionFactory(WalkthroughCommandContribution),
+ 	asContributionFactory(JointCompletionsProviderContribution),
+diff --git a/src/extension/prompt/node/defaultIntentRequestHandler.ts b/src/extension/prompt/node/defaultIntentRequestHandler.ts
+index bd63a178..82c326b3 100644
+--- a/src/extension/prompt/node/defaultIntentRequestHandler.ts
++++ b/src/extension/prompt/node/defaultIntentRequestHandler.ts
+@@ -58,6 +58,7 @@ import { IntentInvocationMetadata } from './conversation';
+ import { IDocumentContext } from './documentContext';
+ import { IBuildPromptResult, IIntent, IIntentInvocation, IResponseProcessor, TelemetryData } from './intents';
+ import { ConversationalBaseTelemetryData, createTelemetryWithId, sendModelMessageTelemetry } from './telemetry';
++import { executeWorkspaceDeepSeekCriticHook } from './workspaceDeepSeekCriticHook';
+ 
+ export interface IDefaultIntentRequestHandlerOptions {
+ 	maxToolCallIterations: number;
+@@ -382,6 +383,20 @@ export class DefaultIntentRequestHandler {
+ 				},
+ 			});
+ 
++			try {
++				const criticResult = await executeWorkspaceDeepSeekCriticHook(this.request.prompt, this._logService, this.documentContext?.document.uri);
++				if (criticResult.additionalContext) {
++					additionalContexts.push(criticResult.additionalContext);
++					this.stream.hookProgress('UserPromptSubmit', l10n.t('DeepSeek critic injected additional context.'));
++					this._logService.info(`[DeepSeekCritic] Injected ${criticResult.additionalContext.length} chars of critique context`);
++				} else if (criticResult.issue) {
++					this.stream.hookProgress('UserPromptSubmit', l10n.t('DeepSeek critic issue: {0}', criticResult.issue.message));
++					this._logService.info(`[DeepSeekCritic] ${criticResult.issue.kind}: ${criticResult.issue.message}`);
++				}
++			} catch (e) {
++				this._logService.debug(`[DeepSeekCritic] Hook execution failed (non-blocking): ${e}`);
++			}
++
+ 			if (additionalContexts.length > 0) {
+ 				loop.appendAdditionalHookContext(additionalContexts.join('\n'));
+ 			}
+diff --git a/src/extension/prompt/node/workspaceDeepSeekCriticHook.ts b/src/extension/prompt/node/workspaceDeepSeekCriticHook.ts
+new file mode 100644
+index 00000000..6c37f837
+--- /dev/null
++++ b/src/extension/prompt/node/workspaceDeepSeekCriticHook.ts
+@@ -0,0 +1,289 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { existsSync, promises as fs } from 'fs';
++import { spawn } from 'child_process';
++import { join } from 'path';
++import type * as vscode from 'vscode';
++import { ILogService } from '../../../platform/log/common/logService';
++
++export const DEEPSEEK_CRITIC_HOOK_FILE = '.copilot/hooks/deepseek-critic.json';
++export const DEEPSEEK_CRITIC_RUNTIME_CONFIG_FILE = '.copilot/hooks/deepseek-critic.config.json';
++const DEFAULT_TIMEOUT_MS = 12_000;
++const DEEPSEEK_CRITIC_ENABLED_SETTING = 'deepseekCritic.enabled';
++
++type DeepSeekCriticWorkspaceApi = Pick<typeof import('vscode').workspace, 'workspaceFolders' | 'getWorkspaceFolder' | 'getConfiguration'>;
++
++let workspaceApi: DeepSeekCriticWorkspaceApi = {
++	workspaceFolders: [],
++	getWorkspaceFolder: () => undefined,
++	getConfiguration: () => ({
++		get: (_key: string, defaultValue: boolean) => defaultValue,
++	}) as ReturnType<typeof import('vscode').workspace.getConfiguration>,
++};
++
++export function configureWorkspaceDeepSeekCriticApi(api: DeepSeekCriticWorkspaceApi): void {
++	workspaceApi = api;
++}
++
++interface HookConfig {
++	readonly type?: string;
++	readonly command?: string;
++	readonly timeout?: number;
++}
++
++interface MatcherConfig {
++	readonly matcher?: string;
++	readonly hooks?: readonly HookConfig[];
++}
++
++interface WorkspaceHookDefinition {
++	readonly hooks?: {
++		readonly UserPromptSubmit?: readonly MatcherConfig[];
++	};
++}
++
++export interface ResolvedDeepSeekCriticHook {
++	readonly workspaceRoot: string;
++	readonly configPath: string;
++	readonly command: string;
++	readonly timeoutMs: number;
++}
++
++export type DeepSeekCriticHookIssueKind =
++	| 'invalid-config'
++	| 'missing-command'
++	| 'spawn-error'
++	| 'non-zero-exit'
++	| 'timeout'
++	| 'no-context';
++
++export interface DeepSeekCriticHookIssue {
++	readonly kind: DeepSeekCriticHookIssueKind;
++	readonly message: string;
++	readonly workspaceRoot?: string;
++	readonly configPath?: string;
++}
++
++export interface DeepSeekCriticHookInspection {
++	readonly workspaceRoot?: string;
++	readonly configPath?: string;
++	readonly runtimeConfigPath?: string;
++	readonly installed: boolean;
++	readonly resolved?: ResolvedDeepSeekCriticHook;
++	readonly issue?: DeepSeekCriticHookIssue;
++}
++
++export interface DeepSeekCriticHookExecutionResult {
++	readonly additionalContext?: string;
++	readonly issue?: DeepSeekCriticHookIssue;
++}
++
++function getWorkspaceFolder(activeResource?: vscode.Uri): vscode.WorkspaceFolder | undefined {
++	return activeResource
++		? workspaceApi.getWorkspaceFolder(activeResource) ?? workspaceApi.workspaceFolders?.[0]
++		: workspaceApi.workspaceFolders?.[0];
++}
++
++export function isWorkspaceDeepSeekCriticEnabled(): boolean {
++	return workspaceApi.getConfiguration('github.copilot.chat').get<boolean>(DEEPSEEK_CRITIC_ENABLED_SETTING, true);
++}
++
++function createIssue(
++	kind: DeepSeekCriticHookIssueKind,
++	message: string,
++	workspaceRoot?: string,
++	configPath?: string,
++): DeepSeekCriticHookIssue {
++	return { kind, message, workspaceRoot, configPath };
++}
++
++export async function inspectWorkspaceDeepSeekCriticHook(activeResource?: vscode.Uri): Promise<DeepSeekCriticHookInspection> {
++	if (!isWorkspaceDeepSeekCriticEnabled()) {
++		return { installed: false };
++	}
++
++	const workspaceFolder = getWorkspaceFolder(activeResource);
++	if (!workspaceFolder) {
++		return { installed: false };
++	}
++
++	const workspaceRoot = workspaceFolder.uri.fsPath;
++	const configPath = join(workspaceRoot, DEEPSEEK_CRITIC_HOOK_FILE);
++	const runtimeConfigPath = join(workspaceRoot, DEEPSEEK_CRITIC_RUNTIME_CONFIG_FILE);
++	if (!existsSync(configPath)) {
++		return { installed: false, workspaceRoot, configPath, runtimeConfigPath };
++	}
++
++	let parsed: WorkspaceHookDefinition | undefined;
++	try {
++		parsed = JSON.parse(await fs.readFile(configPath, 'utf8')) as WorkspaceHookDefinition;
++	} catch {
++		return {
++			installed: true,
++			workspaceRoot,
++			configPath,
++			runtimeConfigPath,
++			issue: createIssue('invalid-config', 'DeepSeek critic hook JSON is invalid.', workspaceRoot, configPath),
++		};
++	}
++
++	const commandEntry = parsed.hooks?.UserPromptSubmit
++		?.flatMap(matcher => matcher.hooks ?? [])
++		.find(hook => hook.type === 'command' && !!hook.command);
++
++	if (!commandEntry?.command) {
++		return {
++			installed: true,
++			workspaceRoot,
++			configPath,
++			runtimeConfigPath,
++			issue: createIssue('missing-command', 'DeepSeek critic hook command is missing.', workspaceRoot, configPath),
++		};
++	}
++
++	if (existsSync(runtimeConfigPath)) {
++		try {
++			JSON.parse(await fs.readFile(runtimeConfigPath, 'utf8')) as Record<string, unknown>;
++		} catch {
++			return {
++				installed: true,
++				workspaceRoot,
++				configPath,
++				runtimeConfigPath,
++				issue: createIssue('invalid-config', 'DeepSeek critic runtime config JSON is invalid.', workspaceRoot, runtimeConfigPath),
++			};
++		}
++	}
++
++	return {
++		installed: true,
++		workspaceRoot,
++		configPath,
++		runtimeConfigPath,
++		resolved: {
++			workspaceRoot,
++			configPath,
++			command: commandEntry.command,
++			timeoutMs: Math.max(1, commandEntry.timeout ?? DEFAULT_TIMEOUT_MS / 1000) * 1000,
++		},
++	};
++}
++
++export async function resolveWorkspaceDeepSeekCriticHook(activeResource?: vscode.Uri): Promise<ResolvedDeepSeekCriticHook | undefined> {
++	return (await inspectWorkspaceDeepSeekCriticHook(activeResource)).resolved;
++}
++
++export function extractAdditionalContextFromHookStdout(stdout: string): string | undefined {
++	if (!stdout.trim()) {
++		return undefined;
++	}
++
++	try {
++		const parsed = JSON.parse(stdout);
++		const ctx = parsed?.hookSpecificOutput?.additionalContext;
++		return typeof ctx === 'string' && ctx.trim().length > 0 ? ctx : undefined;
++	} catch {
++		return undefined;
++	}
++}
++
++export async function executeWorkspaceDeepSeekCriticHook(
++	prompt: string,
++	logService: ILogService,
++	activeResource?: vscode.Uri,
++): Promise<DeepSeekCriticHookExecutionResult> {
++	const inspection = await inspectWorkspaceDeepSeekCriticHook(activeResource);
++	if (inspection.issue) {
++		logService.debug(`[DeepSeekCritic] ${inspection.issue.message}`);
++		return { issue: inspection.issue };
++	}
++
++	const resolved = inspection.resolved;
++	if (!resolved) {
++		return {};
++	}
++
++	return new Promise<DeepSeekCriticHookExecutionResult>((resolve) => {
++		const proc = spawn(resolved.command, [], {
++			cwd: resolved.workspaceRoot,
++			env: process.env,
++			stdio: ['pipe', 'pipe', 'pipe'],
++			shell: true,
++		});
++
++		let stdout = '';
++		let stderr = '';
++		let settled = false;
++
++		const settle = (value: DeepSeekCriticHookExecutionResult) => {
++			if (!settled) {
++				settled = true;
++				resolve(value);
++			}
++		};
++
++		const timer = setTimeout(() => {
++			try {
++				proc.kill('SIGTERM');
++			} catch {
++				// ignore
++			}
++			logService.debug(`[DeepSeekCritic] Hook timed out after ${resolved.timeoutMs}ms (${resolved.configPath})`);
++			settle({
++				issue: createIssue('timeout', 'DeepSeek critic hook timed out.', resolved.workspaceRoot, resolved.configPath),
++			});
++		}, resolved.timeoutMs);
++
++		proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
++		proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
++
++		proc.on('close', (code: number | null) => {
++			clearTimeout(timer);
++
++			if (code !== 0) {
++				logService.debug(`[DeepSeekCritic] Hook exited with code ${code}: ${stderr.trim()}`);
++				settle({
++					issue: createIssue('non-zero-exit', `DeepSeek critic hook exited with code ${code}.`, resolved.workspaceRoot, resolved.configPath),
++				});
++				return;
++			}
++
++			const ctx = extractAdditionalContextFromHookStdout(stdout);
++			if (!ctx && stderr.trim()) {
++				logService.debug(`[DeepSeekCritic] Hook returned no context: ${stderr.trim()}`);
++				settle({
++					issue: createIssue('no-context', stderr.trim(), resolved.workspaceRoot, resolved.configPath),
++				});
++				return;
++			}
++			if (!ctx) {
++				settle({
++					issue: createIssue('no-context', 'DeepSeek critic hook returned no additional context.', resolved.workspaceRoot, resolved.configPath),
++				});
++				return;
++			}
++			settle({ additionalContext: ctx });
++		});
++
++		proc.on('error', (err: Error) => {
++			clearTimeout(timer);
++			logService.debug(`[DeepSeekCritic] Hook spawn error: ${err.message}`);
++			settle({
++				issue: createIssue('spawn-error', `DeepSeek critic hook failed to start: ${err.message}`, resolved.workspaceRoot, resolved.configPath),
++			});
++		});
++
++		const payload: Record<string, string> = {
++			prompt,
++			workspaceRoot: resolved.workspaceRoot,
++		};
++		if (activeResource?.scheme === 'file') {
++			payload.activeFile = activeResource.fsPath;
++		}
++		proc.stdin.write(JSON.stringify(payload));
++		proc.stdin.end();
++	});
++}
+diff --git a/src/extension/prompt/test/node/workspaceDeepSeekCriticHook.spec.ts b/src/extension/prompt/test/node/workspaceDeepSeekCriticHook.spec.ts
+new file mode 100644
+index 00000000..b132826d
+--- /dev/null
++++ b/src/extension/prompt/test/node/workspaceDeepSeekCriticHook.spec.ts
+@@ -0,0 +1,156 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
++import { tmpdir } from 'os';
++import { join } from 'path';
++import { EventEmitter } from 'events';
++
++const vscodeMock = {
++	Uri: {
++		file: (fsPath: string) => ({ fsPath, scheme: 'file' }),
++	},
++	workspace: {
++		workspaceFolders: [],
++		getWorkspaceFolder: () => undefined,
++		getConfiguration: () => ({
++			get: (_key: string, defaultValue: boolean) => defaultValue,
++		}),
++	},
++};
++
++vi.mock('vscode', () => vscodeMock);
++
++const spawnMock = vi.fn();
++vi.mock('child_process', () => ({
++	spawn: (...args: unknown[]) => spawnMock(...args),
++}));
++
++import { configureWorkspaceDeepSeekCriticApi, DEEPSEEK_CRITIC_HOOK_FILE, DEEPSEEK_CRITIC_RUNTIME_CONFIG_FILE, executeWorkspaceDeepSeekCriticHook, extractAdditionalContextFromHookStdout, inspectWorkspaceDeepSeekCriticHook, resolveWorkspaceDeepSeekCriticHook } from '../../node/workspaceDeepSeekCriticHook';
++
++describe('workspaceDeepSeekCriticHook', () => {
++	let tempDir: string | undefined;
++	const originalWorkspaceFolders = (vscodeMock.workspace as any).workspaceFolders;
++	const originalGetWorkspaceFolder = (vscodeMock.workspace as any).getWorkspaceFolder;
++
++	beforeEach(() => {
++		spawnMock.mockReset();
++		configureWorkspaceDeepSeekCriticApi(vscodeMock.workspace as never);
++	});
++
++	afterEach(() => {
++		if (tempDir) {
++			rmSync(tempDir, { recursive: true, force: true });
++			tempDir = undefined;
++		}
++		(vscodeMock.workspace as any).workspaceFolders = originalWorkspaceFolders;
++		(vscodeMock.workspace as any).getWorkspaceFolder = originalGetWorkspaceFolder;
++	});
++
++	it('extracts additionalContext from hook stdout', () => {
++		const stdout = JSON.stringify({
++			hookSpecificOutput: {
++				hookEventName: 'UserPromptSubmit',
++				additionalContext: 'critic output',
++			},
++		});
++		expect(extractAdditionalContextFromHookStdout(stdout)).toBe('critic output');
++	});
++
++	it('resolves a workspace deepseek critic hook command from .copilot/hooks', async () => {
++		tempDir = mkdtempSync(join(tmpdir(), 'deepseek-critic-hook-'));
++		const hooksDir = join(tempDir, '.copilot', 'hooks');
++		mkdirSync(hooksDir, { recursive: true });
++		writeFileSync(join(tempDir, DEEPSEEK_CRITIC_HOOK_FILE), JSON.stringify({
++			hooks: {
++				UserPromptSubmit: [
++					{
++						matcher: '*',
++						hooks: [
++							{ type: 'command', command: 'python3 /tmp/deepseek-critic.py' },
++						],
++					},
++				],
++			},
++		}), 'utf8');
++
++		const workspaceFolder = { uri: vscodeMock.Uri.file(tempDir), name: 'tmp', index: 0 };
++		(vscodeMock.workspace as any).workspaceFolders = [workspaceFolder];
++		(vscodeMock.workspace as any).getWorkspaceFolder = () => workspaceFolder;
++
++		const resolved = await resolveWorkspaceDeepSeekCriticHook();
++		expect(resolved?.workspaceRoot).toBe(tempDir);
++		expect(resolved?.command).toBe('python3 /tmp/deepseek-critic.py');
++	});
++
++	it('reports invalid hook json as an issue', async () => {
++		tempDir = mkdtempSync(join(tmpdir(), 'deepseek-critic-hook-'));
++		const hooksDir = join(tempDir, '.copilot', 'hooks');
++		mkdirSync(hooksDir, { recursive: true });
++		writeFileSync(join(tempDir, DEEPSEEK_CRITIC_HOOK_FILE), '{not json', 'utf8');
++
++		const workspaceFolder = { uri: vscodeMock.Uri.file(tempDir), name: 'tmp', index: 0 };
++		(vscodeMock.workspace as any).workspaceFolders = [workspaceFolder];
++		(vscodeMock.workspace as any).getWorkspaceFolder = () => workspaceFolder;
++
++		const inspection = await inspectWorkspaceDeepSeekCriticHook();
++		expect(inspection.installed).toBe(true);
++		expect(inspection.issue?.kind).toBe('invalid-config');
++	});
++
++	it('reports missing command as an issue', async () => {
++		tempDir = mkdtempSync(join(tmpdir(), 'deepseek-critic-hook-'));
++		const hooksDir = join(tempDir, '.copilot', 'hooks');
++		mkdirSync(hooksDir, { recursive: true });
++		writeFileSync(join(tempDir, DEEPSEEK_CRITIC_HOOK_FILE), JSON.stringify({
++			hooks: {
++				UserPromptSubmit: [
++					{
++						matcher: '*',
++						hooks: [
++							{ type: 'command' },
++						],
++					},
++				],
++			},
++		}), 'utf8');
++
++		const workspaceFolder = { uri: vscodeMock.Uri.file(tempDir), name: 'tmp', index: 0 };
++		(vscodeMock.workspace as any).workspaceFolders = [workspaceFolder];
++		(vscodeMock.workspace as any).getWorkspaceFolder = () => workspaceFolder;
++
++		const inspection = await inspectWorkspaceDeepSeekCriticHook();
++		expect(inspection.issue?.kind).toBe('missing-command');
++	});
++
++	it('reports invalid runtime config json as an issue', async () => {
++		tempDir = mkdtempSync(join(tmpdir(), 'deepseek-critic-hook-'));
++		const hooksDir = join(tempDir, '.copilot', 'hooks');
++		mkdirSync(hooksDir, { recursive: true });
++		writeFileSync(join(tempDir, DEEPSEEK_CRITIC_HOOK_FILE), JSON.stringify({
++			hooks: {
++				UserPromptSubmit: [
++					{
++						matcher: '*',
++						hooks: [
++							{ type: 'command', command: 'python3 /tmp/deepseek-critic.py' },
++						],
++					},
++				],
++			},
++		}), 'utf8');
++		writeFileSync(join(tempDir, DEEPSEEK_CRITIC_RUNTIME_CONFIG_FILE), '{oops', 'utf8');
++
++		const workspaceFolder = { uri: vscodeMock.Uri.file(tempDir), name: 'tmp', index: 0 };
++		(vscodeMock.workspace as any).workspaceFolders = [workspaceFolder];
++		(vscodeMock.workspace as any).getWorkspaceFolder = () => workspaceFolder;
++
++		const inspection = await inspectWorkspaceDeepSeekCriticHook();
++		expect(inspection.issue?.kind).toBe('invalid-config');
++		expect(inspection.issue?.message).toContain('runtime config');
++	});
++
++});
