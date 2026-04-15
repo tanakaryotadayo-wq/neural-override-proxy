@@ -85,4 +85,6 @@ VS Code 側は `geminicodeassist.a2a.address` を bridge に向ける:
 - Gemini UI 向け custom command として `acp_deepthink` / `acp_deepsearch` を追加し、`gemini` / `claude` / `copilot` CLI を PCC 注入つきで呼べる
 - Newgate 要約も bridge に埋め込み、`newgate_status` / `newgate_compare` / `newgate_roadmap` / `newgate_memory_pipeline` / `newgate_deepthink` / `newgate_deepsearch` を叩ける
 - Newgate の埋め込みモデル前提は `qwen3-embedding-8b` (4096d)
+- `titan-bridge/fleet_bridge.py` に KI Promotion Queue を追加し、`fleet_log success` から `~/.gemini/antigravity/ki-promotion-queue.jsonl` へ候補を積める
+- VORTEX extension から queue snapshot / promote / Colab notebook open を操作できる
 - 画像入力は現状 fail-fast。信頼できる VL backend をまだ配線していないため、text-first として扱う

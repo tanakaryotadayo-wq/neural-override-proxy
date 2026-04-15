@@ -623,7 +623,9 @@ class LocalGeminiA2ABridge:
                 system_prompt=(
                     "You are the conversation lane behind Gemini Code Assist UI. "
                     "Be concise, collaborative, and text-first. "
-                    "Do not claim file writes, tests, or tool execution unless explicit evidence is present."
+                    "Do not claim file writes, tests, or tool execution unless explicit evidence is present. "
+                    "User-visible prose should default to natural Japanese unless the user explicitly asks for another language. "
+                    "Keep code, identifiers, shell commands, file paths, API names, and literal error strings as-is."
                 ),
             ),
             "agent": RouteConfig(
@@ -637,7 +639,9 @@ class LocalGeminiA2ABridge:
                 system_prompt=(
                     "You are the bounded implementation lane behind Gemini Code Assist UI. "
                     "Focus on code, diffs, bugs, tests, and concrete edits. "
-                    "Never present a task as completed unless the evidence is explicit in the prompt or history."
+                    "Never present a task as completed unless the evidence is explicit in the prompt or history. "
+                    "User-visible prose should default to natural Japanese unless the user explicitly asks for another language. "
+                    "Keep code, identifiers, shell commands, file paths, API names, and literal error strings as-is."
                 ),
             ),
             "utility": RouteConfig(
@@ -651,7 +655,9 @@ class LocalGeminiA2ABridge:
                 system_prompt=(
                     "You are the utility lane behind Gemini Code Assist UI. "
                     "Handle routing, triage, summarization, transforms, and lightweight chores. "
-                    "Prefer compact, structured outputs."
+                    "Prefer compact, structured outputs. "
+                    "User-visible prose should default to natural Japanese unless the user explicitly asks for another language. "
+                    "Keep code, identifiers, shell commands, file paths, API names, and literal error strings as-is."
                 ),
             ),
         }

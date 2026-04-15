@@ -34,17 +34,20 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
     const successRate = total > 0 ? Math.round(((successCount + recoveryCount) / total) * 100) : 0;
     const status = getStatus();
     const newgate = status.newgate ?? {};
+    const kiQueue = status.kiQueue ?? {};
     const newgateConnected = Boolean(newgate.connected);
     const newgateBadgeClass = newgateConnected ? 'badge-success' : 'badge-failure';
     const newgateBridgeLabel = newgate.bridgeUrl || 'not configured';
+    const kiNotebookBadgeClass = kiQueue.notebookExists ? 'badge-success' : 'badge-recovery';
+    const kiNotebookLabel = kiQueue.notebookExists ? '準備完了' : '未設定';
 
     // Premium UI Design
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VORTEX Overview</title>
+    <title>VORTEX ダッシュボード</title>
     <style>
         :root {
             --bg: #0f111a;
@@ -294,7 +297,7 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
             <div class="logo">🌀 VORTEX</div>
             <div style="display: flex; align-items: center;">
                 <span class="status-indicator"></span> 
-                <span style="color: var(--text-muted); font-size: 0.85em; font-weight: 500; letter-spacing: 1px;">SYSTEM ONLINE</span>
+                <span style="color: var(--text-muted); font-size: 0.85em; font-weight: 500; letter-spacing: 1px;">システム稼働中</span>
             </div>
         </div>
         <div class="actions">
@@ -305,9 +308,9 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
 
     <div class="grid">
         <div class="card">
-            <h3>Fleet Intelligence</h3>
+            <h3>フリート状況</h3>
             <div class="stat-value color-primary">
-                ${successRate}% <span class="stat-subtitle">Success Rate</span>
+                ${successRate}% <span class="stat-subtitle">成功率</span>
             </div>
             <div class="progress-bar">
                 <div class="progress-fill"></div>
@@ -320,7 +323,7 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
         </div>
 
         <div class="card">
-            <h3>Critic Status</h3>
+            <h3>Critic 状態</h3>
             <div class="critic-panel">
                 <div>
                     <span style="color: var(--text-muted); font-size: 0.8em;">Preset:</span> 
@@ -331,48 +334,75 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
                     <span style="float:right;">DeepSeek VORTEX</span>
                 </div>
                 <div style="margin-top: 10px;">
-                    <span style="color: var(--text-muted); font-size: 0.8em;">Last Verdict:</span> 
+                    <span style="color: var(--text-muted); font-size: 0.8em;">直近判定:</span> 
                     <span style="float:right;" class="${status.lastVerdict === 'VERIFIED' ? 'color-success' : status.lastVerdict === 'UNVERIFIED' ? 'color-danger' : 'color-warning'}">
-                        ${status.lastVerdict || 'PENDING'}
+                        ${status.lastVerdict || '保留'}
                     </span>
                 </div>
             </div>
         </div>
 
         <div class="card">
-            <h3>Newgate Link</h3>
+            <h3>Newgate 接続</h3>
             <div class="critic-panel">
                 <div>
                     <span style="color: var(--text-muted); font-size: 0.8em;">Bridge:</span>
-                    <span class="badge ${newgateBadgeClass}" style="float:right;">${newgateConnected ? 'ONLINE' : 'OFFLINE'}</span>
+                    <span class="badge ${newgateBadgeClass}" style="float:right;">${newgateConnected ? '接続中' : '切断中'}</span>
                 </div>
                 <div style="margin-top: 10px;">
                     <span style="color: var(--text-muted); font-size: 0.8em;">Version:</span>
                     <span style="float:right;">${newgate.version || '-'}</span>
                 </div>
                 <div style="margin-top: 10px;">
-                    <span style="color: var(--text-muted); font-size: 0.8em;">Embedding:</span>
+                    <span style="color: var(--text-muted); font-size: 0.8em;">埋め込み:</span>
                     <span style="float:right;">${newgate.embeddingModel || '-'}</span>
                 </div>
                 <div style="margin-top: 10px;">
-                    <span style="color: var(--text-muted); font-size: 0.8em;">Memory:</span>
+                    <span style="color: var(--text-muted); font-size: 0.8em;">記憶:</span>
                     <span style="float:right;">${newgate.recallStatus || '-'} / ${newgate.storeStatus || '-'}</span>
                 </div>
                 <div style="margin-top: 10px;">
-                    <span style="color: var(--text-muted); font-size: 0.8em;">P0 Focus:</span>
-                    <span style="float:right;">${newgate.p0Count ?? 0} items</span>
+                    <span style="color: var(--text-muted); font-size: 0.8em;">P0項目:</span>
+                    <span style="float:right;">${newgate.p0Count ?? 0} 件</span>
                 </div>
             </div>
             <div class="log-result" style="margin-top: 12px;">${newgateBridgeLabel}</div>
             ${newgate.error ? `<div style="margin-top: 8px; color: var(--warning); font-size: 0.8em;">${newgate.error}</div>` : ''}
             <div style="margin-top: 12px;">
-                <button class="btn" onclick="postMessage('openNewgate')">🧠 Open Newgate Snapshot</button>
+                <button class="btn" onclick="postMessage('openNewgate')">🧠 Newgate Snapshot を開く</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>KI 昇格キュー</h3>
+            <div class="critic-panel">
+                <div>
+                    <span style="color: var(--text-muted); font-size: 0.8em;">未昇格:</span>
+                    <span style="float:right;" class="color-warning">${kiQueue.pendingCount ?? 0}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">昇格済み:</span>
+                    <span style="float:right;" class="color-success">${kiQueue.promotedCount ?? 0}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Colab:</span>
+                    <span class="badge ${kiNotebookBadgeClass}" style="float:right;">${kiNotebookLabel}</span>
+                </div>
+            </div>
+            <div class="log-result" style="margin-top: 12px;">${kiQueue.latestPendingTitle || '未昇格の KI 候補はありません'}</div>
+            <div style="margin-top: 8px; color: var(--text-muted); font-size: 0.78em;">${kiQueue.queueFile || 'queue file 未設定'}</div>
+            <div class="actions" style="margin-top: 12px;">
+                <button class="btn" onclick="postMessage('openKiQueue')">📚 キューを開く</button>
+                <button class="btn" onclick="postMessage('promoteKi')">⬆️ 昇格する</button>
+            </div>
+            <div style="margin-top: 10px;">
+                <button class="btn" onclick="postMessage('openKiNotebook')">📓 Colab Notebook を開く</button>
             </div>
         </div>
     </div>
 
     <div class="logs-container">
-        <h3 style="margin: 0 0 20px 0; color: var(--text-muted); letter-spacing: 1px; font-size: 0.9em;">FLEET OPERATIONAL LOGS</h3>
+        <h3 style="margin: 0 0 20px 0; color: var(--text-muted); letter-spacing: 1px; font-size: 0.9em;">フリート運用ログ</h3>
         ${logs.length > 0 ? `
         <div class="log-list">
             ${logs.map(log => `
@@ -391,7 +421,7 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
         </div>
         ` : `
         <div style="text-align: center; padding: 40px; color: var(--text-muted);">
-            No fleet logs recorded today.
+            今日はまだフリートログがありません。
         </div>
         `}
     </div>

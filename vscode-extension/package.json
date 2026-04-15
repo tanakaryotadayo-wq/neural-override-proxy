@@ -36,39 +36,54 @@
     "commands": [
       {
         "command": "vortex.openAsyncTaskDashboard",
-        "title": "VORTEX: Open Async Task Dashboard",
+        "title": "VORTEX: Async Task Dashboard を開く",
         "icon": "$(sparkle)"
       },
       {
         "command": "vortex.runAudit",
-        "title": "VORTEX: Run Audit on Active File",
+        "title": "VORTEX: アクティブファイルを監査",
         "icon": "$(shield)"
       },
       {
         "command": "vortex.runAuditSelection",
-        "title": "VORTEX: Audit Selected Code"
+        "title": "VORTEX: 選択コードを監査"
       },
       {
         "command": "vortex.viewLogs",
-        "title": "VORTEX: View Fleet Logs"
+        "title": "VORTEX: フリートログを表示"
       },
       {
         "command": "vortex.clearLogs",
-        "title": "VORTEX: Clear Today's Logs"
+        "title": "VORTEX: 今日のログを消去"
       },
       {
         "command": "vortex.refreshSidebar",
-        "title": "VORTEX: Refresh Sidebar",
+        "title": "VORTEX: サイドバーを更新",
         "icon": "$(refresh)"
       },
       {
         "command": "vortex.openNewgateSnapshot",
-        "title": "VORTEX: Open Newgate Snapshot",
+        "title": "VORTEX: Newgate Snapshot を開く",
         "icon": "$(light-bulb)"
       },
       {
+        "command": "vortex.openKiQueueSnapshot",
+        "title": "VORTEX: KI Queue Snapshot を開く",
+        "icon": "$(book)"
+      },
+      {
+        "command": "vortex.openKiColabNotebook",
+        "title": "VORTEX: KI Colab Notebook を開く",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "vortex.promoteKiCandidate",
+        "title": "VORTEX: KI 候補を昇格",
+        "icon": "$(arrow-up)"
+      },
+      {
         "command": "vortex.switchPreset",
-        "title": "VORTEX: Switch PCC Preset"
+        "title": "VORTEX: PCC Preset を切替"
       }
     ],
     "menus": {
@@ -111,17 +126,32 @@
             "極",
             "均"
           ],
-          "description": "PCC Preset for DeepSeek critic"
+          "description": "DeepSeek critic に使う PCC Preset"
         },
         "vortex.criticScript": {
           "type": "string",
           "default": "",
-          "description": "Path to vortex-critic.py (auto-detected if empty)"
+          "description": "vortex-critic.py のパス（空なら自動検出）"
         },
         "vortex.autoAuditOnSave": {
           "type": "boolean",
           "default": false,
-          "description": "Automatically run VORTEX audit on file save"
+          "description": "ファイル保存時に VORTEX 監査を自動実行"
+        },
+        "vortex.kiQueueFile": {
+          "type": "string",
+          "default": "",
+          "description": "KI 昇格キュー JSONL のパス（空なら自動検出）"
+        },
+        "vortex.kiKnowledgeDir": {
+          "type": "string",
+          "default": "",
+          "description": "~/.gemini/antigravity/knowledge のパス（空なら自動検出）"
+        },
+        "vortex.kiColabNotebook": {
+          "type": "string",
+          "default": "",
+          "description": "KI ベクトル化に使う Colab/Jupyter notebook のパス（空なら自動検出）"
         }
       }
     }

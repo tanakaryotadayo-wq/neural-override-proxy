@@ -17,6 +17,8 @@ import json
 import sys
 import urllib.request
 import urllib.error
+import hashlib
+import re
 
 # Mac Studio のローカル fusion-gate API
 FUSION_GATE_URL = "http://localhost:9000"
@@ -64,6 +66,33 @@ TOOLS = [
                 "append": {"type": "boolean", "default": True},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "ki_queue_list",
+        "description": "KI昇格キューを一覧する",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["pending", "promoted", "all"], "default": "pending"},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+    },
+    {
+        "name": "ki_queue_promote",
+        "description": "KI昇格キューの項目を knowledge/ に昇格する",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "string", "description": "キュー項目ID"},
+                "ki_name": {"type": "string", "description": "昇格先のKIディレクトリ名"},
+                "title": {"type": "string", "description": "KIタイトル"},
+                "summary": {"type": "string", "description": "KI要約"},
+                "artifact_name": {"type": "string", "description": "artifact markdown file name"},
+                "content": {"type": "string", "description": "artifact markdown本文"},
+            },
+            "required": ["entry_id"],
         },
     },
 
@@ -139,6 +168,196 @@ from datetime import datetime
 
 LOG_DIR = Path(os.environ.get("FLEET_LOG_DIR", os.path.expanduser("~/.gemini/antigravity/fleet-logs")))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+KI_QUEUE_FILE = Path(
+    os.environ.get("KI_QUEUE_FILE", os.path.expanduser("~/.gemini/antigravity/ki-promotion-queue.jsonl"))
+)
+KI_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+KI_KNOWLEDGE_DIR = Path(
+    os.environ.get("KI_KNOWLEDGE_DIR", os.path.expanduser("~/.gemini/antigravity/knowledge"))
+)
+KI_COLAB_NOTEBOOK = os.environ.get(
+    "KI_COLAB_NOTEBOOK",
+    os.path.expanduser("~/Newgate/ki_agent_system/colab_ki_vectorizer.ipynb"),
+)
+
+
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
+def _slugify(value: str, fallback: str = "ki_candidate") -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", (value or "").strip().lower()).strip("_")
+    return normalized or fallback
+
+
+def _load_queue() -> list[dict]:
+    if not KI_QUEUE_FILE.exists():
+        return []
+    entries = []
+    with open(KI_QUEUE_FILE, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return entries
+
+
+def _write_queue(entries: list[dict]) -> None:
+    with open(KI_QUEUE_FILE, "w", encoding="utf-8") as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _make_queue_entry(arguments: dict, log_file: Path) -> dict:
+    task = arguments.get("task", "").strip()
+    result = arguments.get("result", "").strip()
+    raw_title = task or result[:80] or "KI Candidate"
+    fingerprint = hashlib.sha256(f"{task}\n{result}".encode("utf-8")).hexdigest()[:16]
+    return {
+        "id": f"ki_{fingerprint}",
+        "status": "pending",
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "title": raw_title[:120],
+        "summary": (result or task)[:400],
+        "task": task,
+        "result": result,
+        "cause": arguments.get("cause"),
+        "fix": arguments.get("fix"),
+        "tags": arguments.get("tags", []),
+        "suggested_ki_name": _slugify(task or raw_title),
+        "log_file": str(log_file),
+        "notebook_path": KI_COLAB_NOTEBOOK,
+    }
+
+
+def _append_queue_entry(entry: dict) -> None:
+    entries = _load_queue()
+    for existing in entries:
+        if existing.get("id") == entry["id"]:
+            existing.update(
+                {
+                    "updated_at": _now_iso(),
+                    "status": existing.get("status", "pending"),
+                    "task": entry["task"],
+                    "result": entry["result"],
+                    "summary": entry["summary"],
+                    "tags": entry.get("tags", []),
+                    "log_file": entry["log_file"],
+                    "notebook_path": entry["notebook_path"],
+                }
+            )
+            _write_queue(entries)
+            return
+    entries.append(entry)
+    _write_queue(entries)
+
+
+def handle_ki_queue_list(arguments: dict) -> dict:
+    status = arguments.get("status", "pending")
+    limit = max(1, int(arguments.get("limit", 20)))
+    entries = _load_queue()
+    if status != "all":
+        entries = [entry for entry in entries if entry.get("status") == status]
+    entries = sorted(entries, key=lambda item: item.get("updated_at", ""), reverse=True)
+    return {
+        "status": "ok",
+        "queue_file": str(KI_QUEUE_FILE),
+        "knowledge_dir": str(KI_KNOWLEDGE_DIR),
+        "notebook_path": KI_COLAB_NOTEBOOK,
+        "count": len(entries),
+        "entries": entries[:limit],
+    }
+
+
+def _default_artifact_content(entry: dict, title: str) -> str:
+    lines = [
+        f"# {title}",
+        "",
+        "## Source Task",
+        entry.get("task", ""),
+        "",
+        "## Result",
+        entry.get("result", ""),
+    ]
+    if entry.get("fix"):
+        lines.extend(["", "## Fix", entry["fix"]])
+    if entry.get("cause"):
+        lines.extend(["", "## Cause", entry["cause"]])
+    if entry.get("tags"):
+        lines.extend(["", "## Tags", " ".join(f"#{tag}" for tag in entry["tags"])])
+    return "\n".join(line for line in lines if line is not None).strip() + "\n"
+
+
+def handle_ki_queue_promote(arguments: dict) -> dict:
+    entry_id = arguments.get("entry_id", "").strip()
+    if not entry_id:
+        return {"error": "entry_id is required"}
+
+    entries = _load_queue()
+    entry = next((item for item in entries if item.get("id") == entry_id), None)
+    if entry is None:
+        return {"error": f"queue entry not found: {entry_id}"}
+
+    ki_name = _slugify(arguments.get("ki_name") or entry.get("suggested_ki_name") or entry.get("title", ""))
+    title = (arguments.get("title") or entry.get("title") or ki_name).strip()
+    summary = (arguments.get("summary") or entry.get("summary") or title).strip()
+    artifact_name = arguments.get("artifact_name") or f"{entry_id}.md"
+    if not artifact_name.endswith(".md"):
+        artifact_name += ".md"
+    content = (arguments.get("content") or _default_artifact_content(entry, title)).strip() + "\n"
+
+    ki_dir = KI_KNOWLEDGE_DIR / ki_name
+    artifacts_dir = ki_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata_path = ki_dir / "metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+    else:
+        metadata = {}
+    metadata.setdefault("title", title)
+    metadata.setdefault("summary", summary)
+    references = metadata.setdefault("references", [])
+    references.append({"type": "fleet_queue", "value": entry_id})
+    references.append({"type": "file", "value": f"artifacts/{artifact_name}"})
+    metadata["summary"] = summary
+    with open(metadata_path, "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, ensure_ascii=False, indent=2)
+
+    artifact_path = artifacts_dir / artifact_name
+    with open(artifact_path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+    timestamps_path = ki_dir / "timestamps.json"
+    now = _now_iso()
+    timestamps = {"created": now, "modified": now, "accessed": now}
+    if timestamps_path.exists():
+        with open(timestamps_path, "r", encoding="utf-8") as handle:
+            existing = json.load(handle)
+        timestamps["created"] = existing.get("created", now)
+    with open(timestamps_path, "w", encoding="utf-8") as handle:
+        json.dump(timestamps, handle, ensure_ascii=False, indent=2)
+
+    entry["status"] = "promoted"
+    entry["updated_at"] = now
+    entry["promoted_at"] = now
+    entry["knowledge_dir"] = str(ki_dir)
+    entry["artifact_path"] = str(artifact_path)
+    _write_queue(entries)
+
+    return {
+        "status": "promoted",
+        "entry": entry,
+        "knowledge_dir": str(ki_dir),
+        "artifact_path": str(artifact_path),
+        "notebook_path": KI_COLAB_NOTEBOOK,
+    }
 
 
 def handle_fleet_log(arguments: dict) -> dict:
@@ -159,7 +378,16 @@ def handle_fleet_log(arguments: dict) -> dict:
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    return {"status": "logged", "file": str(log_file), "entry": entry}
+    queue_entry = None
+    if entry.get("event_type") == "success" and (entry.get("task") or entry.get("result")):
+        queue_entry = _make_queue_entry(arguments, log_file)
+        _append_queue_entry(queue_entry)
+
+    result = {"status": "logged", "file": str(log_file), "entry": entry}
+    if queue_entry is not None:
+        result["ki_queue_entry"] = queue_entry
+        result["ki_queue_file"] = str(KI_QUEUE_FILE)
+    return result
 
 
 def call_fusion_gate(tool_name: str, arguments: dict) -> dict:
@@ -201,6 +429,10 @@ def handle_request(request: dict) -> "dict | None":
         # fleet_log はローカル処理
         if name == "fleet_log":
             result = handle_fleet_log(arguments)
+        elif name == "ki_queue_list":
+            result = handle_ki_queue_list(arguments)
+        elif name == "ki_queue_promote":
+            result = handle_ki_queue_promote(arguments)
         else:
             # fusion-gate API に中継
             result = call_fusion_gate(name, arguments)

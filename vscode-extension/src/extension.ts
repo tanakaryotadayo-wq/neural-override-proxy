@@ -11,6 +11,18 @@ const FLEET_LOG_DIR = path.join(
   process.env.HOME ?? '/Users/ryyota',
   '.gemini/antigravity/fleet-logs'
 );
+const DEFAULT_KI_QUEUE_FILE = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  '.gemini/antigravity/ki-promotion-queue.jsonl'
+);
+const DEFAULT_KI_KNOWLEDGE_DIR = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  '.gemini/antigravity/knowledge'
+);
+const DEFAULT_KI_COLAB_NOTEBOOK = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'Newgate/ki_agent_system/colab_ki_vectorizer.ipynb'
+);
 
 interface NewgateStatus {
   connected: boolean;
@@ -22,6 +34,191 @@ interface NewgateStatus {
   p0Count: number;
   error?: string;
   profile?: any;
+}
+
+interface KiQueueEntry {
+  id: string;
+  status: 'pending' | 'promoted' | string;
+  title?: string;
+  summary?: string;
+  task?: string;
+  result?: string;
+  cause?: string;
+  fix?: string;
+  tags?: string[];
+  suggested_ki_name?: string;
+  created_at?: string;
+  updated_at?: string;
+  knowledge_dir?: string;
+  artifact_path?: string;
+  notebook_path?: string;
+}
+
+interface KiQueueStatus {
+  queueFile: string;
+  knowledgeDir: string;
+  notebookPath: string;
+  notebookExists: boolean;
+  pendingCount: number;
+  promotedCount: number;
+  latestPendingTitle: string | null;
+}
+
+function getKiQueueFile(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('kiQueueFile')?.trim() || DEFAULT_KI_QUEUE_FILE;
+}
+
+function getKiKnowledgeDir(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('kiKnowledgeDir')?.trim() || DEFAULT_KI_KNOWLEDGE_DIR;
+}
+
+function getKiColabNotebook(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('kiColabNotebook')?.trim() || DEFAULT_KI_COLAB_NOTEBOOK;
+}
+
+function slugifyKiName(value: string, fallback = 'ki_candidate'): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+}
+
+function loadKiQueueEntries(): KiQueueEntry[] {
+  const queueFile = getKiQueueFile();
+  if (!fs.existsSync(queueFile)) {
+    return [];
+  }
+  const raw = fs.readFileSync(queueFile, 'utf-8');
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as KiQueueEntry];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function saveKiQueueEntries(entries: KiQueueEntry[]): void {
+  const queueFile = getKiQueueFile();
+  fs.mkdirSync(path.dirname(queueFile), { recursive: true });
+  fs.writeFileSync(
+    queueFile,
+    entries.map((entry) => JSON.stringify(entry)).join('\n') + (entries.length > 0 ? '\n' : ''),
+    'utf-8'
+  );
+}
+
+async function fetchKiQueueStatus(): Promise<KiQueueStatus> {
+  const queueFile = getKiQueueFile();
+  const knowledgeDir = getKiKnowledgeDir();
+  const notebookPath = getKiColabNotebook();
+  const entries = loadKiQueueEntries();
+  const pendingEntries = entries.filter((entry) => entry.status !== 'promoted');
+  const promotedEntries = entries.filter((entry) => entry.status === 'promoted');
+  return {
+    queueFile,
+    knowledgeDir,
+    notebookPath,
+    notebookExists: fs.existsSync(notebookPath),
+    pendingCount: pendingEntries.length,
+    promotedCount: promotedEntries.length,
+    latestPendingTitle: pendingEntries[0]?.title ?? null,
+  };
+}
+
+function buildKiArtifactMarkdown(entry: KiQueueEntry, title: string): string {
+  const sections = [
+    `# ${title}`,
+    '',
+    '## Source Task',
+    entry.task || '',
+    '',
+    '## Result',
+    entry.result || '',
+  ];
+  if (entry.fix) {
+    sections.push('', '## Fix', entry.fix);
+  }
+  if (entry.cause) {
+    sections.push('', '## Cause', entry.cause);
+  }
+  if (Array.isArray(entry.tags) && entry.tags.length > 0) {
+    sections.push('', '## Tags', entry.tags.map((tag) => `#${tag}`).join(' '));
+  }
+  return sections.filter((line) => line !== undefined).join('\n').trim() + '\n';
+}
+
+function promoteKiQueueEntry(entry: KiQueueEntry, kiNameOverride?: string): { kiDir: string; artifactPath: string } {
+  const knowledgeDir = getKiKnowledgeDir();
+  const kiName = slugifyKiName(kiNameOverride || entry.suggested_ki_name || entry.title || entry.id);
+  const kiDir = path.join(knowledgeDir, kiName);
+  const artifactsDir = path.join(kiDir, 'artifacts');
+  fs.mkdirSync(artifactsDir, { recursive: true });
+
+  const title = (entry.title || entry.suggested_ki_name || kiName).trim();
+  const summary = (entry.summary || entry.task || title).trim();
+  const artifactFile = `${entry.id}.md`;
+  const metadataPath = path.join(kiDir, 'metadata.json');
+  const timestampsPath = path.join(kiDir, 'timestamps.json');
+  const artifactPath = path.join(artifactsDir, artifactFile);
+
+  let metadata: any = {};
+  if (fs.existsSync(metadataPath)) {
+    try {
+      metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf-8'));
+    } catch {
+      metadata = {};
+    }
+  }
+  const references = Array.isArray(metadata.references) ? metadata.references : [];
+  references.push({ type: 'fleet_queue', value: entry.id });
+  references.push({ type: 'file', value: `artifacts/${artifactFile}` });
+  metadata = {
+    ...metadata,
+    title: metadata.title || title,
+    summary,
+    references,
+  };
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
+  fs.writeFileSync(artifactPath, buildKiArtifactMarkdown(entry, title), 'utf-8');
+
+  const now = new Date().toISOString();
+  let created = now;
+  if (fs.existsSync(timestampsPath)) {
+    try {
+      created = JSON.parse(fs.readFileSync(timestampsPath, 'utf-8')).created || now;
+    } catch {
+      created = now;
+    }
+  }
+  fs.writeFileSync(
+    timestampsPath,
+    JSON.stringify({ created, modified: now, accessed: now }, null, 2),
+    'utf-8'
+  );
+
+  const entries = loadKiQueueEntries();
+  const updatedEntries = entries.map((candidate) =>
+    candidate.id === entry.id
+      ? {
+          ...candidate,
+          status: 'promoted',
+          updated_at: now,
+          promoted_at: now,
+          knowledge_dir: kiDir,
+          artifact_path: artifactPath,
+        }
+      : candidate
+  );
+  saveKiQueueEntries(updatedEntries);
+
+  return { kiDir, artifactPath };
 }
 
 function getBridgeUrl(): string {
@@ -37,8 +234,8 @@ async function fetchNewgateStatus(): Promise<NewgateStatus> {
       bridgeUrl: '',
       version: '-',
       embeddingModel: '-',
-      recallStatus: 'unknown',
-      storeStatus: 'unknown',
+      recallStatus: '不明',
+      storeStatus: '不明',
       p0Count: 0,
       error: 'geminicodeassist.a2a.address が未設定',
     };
@@ -64,20 +261,20 @@ async function fetchNewgateStatus(): Promise<NewgateStatus> {
       bridgeUrl,
       version: String(profile.version ?? '-'),
       embeddingModel: String(profile.embedding?.primaryModel ?? '-'),
-      recallStatus: String(profile.memory?.recall?.status ?? 'unknown'),
-      storeStatus: String(profile.memory?.store?.status ?? 'unknown'),
+      recallStatus: String(profile.memory?.recall?.status ?? '不明'),
+      storeStatus: String(profile.memory?.store?.status ?? '不明'),
       p0Count: priorities.filter((item: any) => item?.priority === 'P0').length,
       profile,
     };
   } catch (error: any) {
-    const message = error?.name === 'AbortError' ? 'bridge timeout' : (error?.message ?? 'bridge error');
+    const message = error?.name === 'AbortError' ? 'bridge timeout（タイムアウト）' : (error?.message ?? 'bridge error（接続失敗）');
     return {
       connected: false,
       bridgeUrl,
       version: '-',
       embeddingModel: '-',
-      recallStatus: 'unknown',
-      storeStatus: 'unknown',
+      recallStatus: '不明',
+      storeStatus: '不明',
       p0Count: 0,
       error: message,
     };
@@ -181,6 +378,7 @@ class VortexSidebarProvider implements vscode.WebviewViewProvider {
         preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
         lastVerdict: lastAuditResult?.verdict || null,
         newgate: await fetchNewgateStatus(),
+        kiQueue: await fetchKiQueueStatus(),
       };
       webviewView.webview.html = getDashboardHtml(this._extensionUri, FLEET_LOG_DIR, () => status);
     };
@@ -194,6 +392,12 @@ class VortexSidebarProvider implements vscode.WebviewViewProvider {
         vscode.commands.executeCommand('vortex.runAudit');
       } else if (msg.command === 'openNewgate') {
         vscode.commands.executeCommand('vortex.openNewgateSnapshot');
+      } else if (msg.command === 'openKiQueue') {
+        vscode.commands.executeCommand('vortex.openKiQueueSnapshot');
+      } else if (msg.command === 'openKiNotebook') {
+        vscode.commands.executeCommand('vortex.openKiColabNotebook');
+      } else if (msg.command === 'promoteKi') {
+        vscode.commands.executeCommand('vortex.promoteKiCandidate');
       }
     });
   }
@@ -205,6 +409,7 @@ class VortexSidebarProvider implements vscode.WebviewViewProvider {
         preset: vscode.workspace.getConfiguration('vortex').get<string>('preset') ?? '渦',
         lastVerdict: lastAuditResult?.verdict || null,
         newgate: await fetchNewgateStatus(),
+        kiQueue: await fetchKiQueueStatus(),
       };
       this._view.webview.html = getDashboardHtml(this._extensionUri, FLEET_LOG_DIR, () => status);
     }
@@ -320,7 +525,7 @@ export function activate(context: vscode.ExtensionContext) {
       const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX Auditing...' },
+        { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX 監査中...' },
         async () => {
           const result = await runVortexAudit(code, wsRoot, context);
           lastAuditResult = result;
@@ -328,17 +533,17 @@ export function activate(context: vscode.ExtensionContext) {
 
           const channel = vscode.window.createOutputChannel('VORTEX Critic');
           channel.clear();
-          channel.appendLine(`=== VORTEX Audit Result ===`);
-          channel.appendLine(`Verdict: ${result.verdict}`);
+          channel.appendLine(`=== VORTEX 監査結果 ===`);
+          channel.appendLine(`判定: ${result.verdict}`);
           channel.appendLine(`Preset: PCC #${result.preset}`);
-          channel.appendLine(`Time: ${(result.elapsed / 1000).toFixed(1)}s`);
+          channel.appendLine(`時間: ${(result.elapsed / 1000).toFixed(1)}s`);
           channel.appendLine(`\n${result.text}`);
           channel.show();
 
           if (result.verdict === 'VERIFIED') {
             vscode.window.showInformationMessage(`✅ VORTEX: VERIFIED (${(result.elapsed / 1000).toFixed(1)}s)`);
           } else if (result.verdict === 'UNVERIFIED') {
-            vscode.window.showWarningMessage(`❌ VORTEX: UNVERIFIED — evidence missing`);
+            vscode.window.showWarningMessage('❌ VORTEX: UNVERIFIED — 証拠不足');
           } else {
             vscode.window.showErrorMessage(`⚠️ VORTEX: ${result.text}`);
           }
@@ -357,7 +562,7 @@ export function activate(context: vscode.ExtensionContext) {
       const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX Auditing selection...' },
+        { location: vscode.ProgressLocation.Notification, title: '🌀 VORTEX 選択範囲を監査中...' },
         async () => {
           const result = await runVortexAudit(code, wsRoot, context);
           lastAuditResult = result;
@@ -365,8 +570,8 @@ export function activate(context: vscode.ExtensionContext) {
 
           const channel = vscode.window.createOutputChannel('VORTEX Critic');
           channel.clear();
-          channel.appendLine(`=== VORTEX Selection Audit ===`);
-          channel.appendLine(`Verdict: ${result.verdict}`);
+          channel.appendLine(`=== VORTEX 選択範囲監査 ===`);
+          channel.appendLine(`判定: ${result.verdict}`);
           channel.appendLine(`\n${result.text}`);
           channel.show();
         }
@@ -379,7 +584,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (fs.existsSync(logFile)) {
         vscode.workspace.openTextDocument(logFile).then(doc => vscode.window.showTextDocument(doc));
       } else {
-        vscode.window.showInformationMessage('No fleet logs today');
+        vscode.window.showInformationMessage('今日はまだフリートログがありません');
       }
     }),
 
@@ -388,12 +593,12 @@ export function activate(context: vscode.ExtensionContext) {
       const logFile = path.join(FLEET_LOG_DIR, `fleet_${today}.jsonl`);
       if (fs.existsSync(logFile)) {
         const confirm = await vscode.window.showWarningMessage(
-          'Clear today\'s fleet logs?', { modal: true }, 'Clear'
+          '今日のフリートログを消去しますか？', { modal: true }, '消去'
         );
-        if (confirm === 'Clear') {
+        if (confirm === '消去') {
           fs.unlinkSync(logFile);
           void sidebarProvider.refresh();
-          vscode.window.showInformationMessage('Fleet logs cleared');
+          vscode.window.showInformationMessage('フリートログを消去しました');
         }
       }
     }),
@@ -411,6 +616,72 @@ export function activate(context: vscode.ExtensionContext) {
       await vscode.window.showTextDocument(doc, { preview: false });
     }),
 
+    vscode.commands.registerCommand('vortex.openKiQueueSnapshot', async () => {
+      const entries = loadKiQueueEntries();
+      const doc = await vscode.workspace.openTextDocument({
+        language: 'json',
+        content: JSON.stringify(
+          {
+            queueFile: getKiQueueFile(),
+            knowledgeDir: getKiKnowledgeDir(),
+            notebookPath: getKiColabNotebook(),
+            entries,
+          },
+          null,
+          2
+        ),
+      });
+      await vscode.window.showTextDocument(doc, { preview: false });
+    }),
+
+    vscode.commands.registerCommand('vortex.openKiColabNotebook', async () => {
+      const notebookPath = getKiColabNotebook();
+      if (!fs.existsSync(notebookPath)) {
+        vscode.window.showWarningMessage(`KI ノートブックが見つからない: ${notebookPath}`);
+        return;
+      }
+      const uri = vscode.Uri.file(notebookPath);
+      await vscode.commands.executeCommand('vscode.open', uri);
+    }),
+
+    vscode.commands.registerCommand('vortex.promoteKiCandidate', async () => {
+      const pendingEntries = loadKiQueueEntries().filter((entry) => entry.status !== 'promoted');
+      if (pendingEntries.length === 0) {
+        vscode.window.showInformationMessage('未昇格の KI 候補はありません');
+        return;
+      }
+
+      const pick = await vscode.window.showQuickPick(
+        pendingEntries.map((entry) => ({
+          label: entry.title || entry.id,
+          description: entry.summary?.slice(0, 80) || entry.task?.slice(0, 80) || '',
+          detail: entry.id,
+          entry,
+        })),
+        {
+          placeHolder: '~/.gemini/antigravity/knowledge に昇格する KI 候補を選択',
+        }
+      );
+      if (!pick) {
+        return;
+      }
+
+      const kiName = await vscode.window.showInputBox({
+        prompt: 'KI ディレクトリ名',
+        value: pick.entry.suggested_ki_name || slugifyKiName(pick.label),
+        validateInput: (value) => (value.trim() ? undefined : 'KI ディレクトリ名は必須です'),
+      });
+      if (!kiName) {
+        return;
+      }
+
+      const promoted = promoteKiQueueEntry(pick.entry, kiName);
+      void sidebarProvider.refresh();
+      vscode.window.showInformationMessage(`KI を昇格: ${promoted.kiDir}`);
+      const doc = await vscode.workspace.openTextDocument(promoted.artifactPath);
+      await vscode.window.showTextDocument(doc, { preview: false });
+    }),
+
     vscode.commands.registerCommand('vortex.switchPreset', async () => {
       const presets = [
         { label: '#渦 (VORTEX)', description: 'Completion Illusion検知専用', value: '渦' },
@@ -421,12 +692,12 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '#均 (Balance)', description: '長所短所のバランス', value: '均' },
       ];
       const pick = await vscode.window.showQuickPick(presets, {
-        placeHolder: 'Select PCC Preset',
+        placeHolder: 'PCC Preset を選択',
       });
       if (pick) {
         await vscode.workspace.getConfiguration('vortex').update('preset', pick.value, true);
         void sidebarProvider.refresh();
-        vscode.window.showInformationMessage(`PCC Preset: ${pick.label}`);
+        vscode.window.showInformationMessage(`PCC Preset を切替: ${pick.label}`);
       }
     }),
   );
