@@ -1,0 +1,71 @@
+╔══════════════════════════════════════════════════╗
+║  Newgate Repo Audit Sweep                       ║
+║  Model: gemini-3.1-pro-preview                    ║
+║  Repos: 8  Presets: 4  Total: 32 calls    ║
+╚══════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 neural-override-proxy (own)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 177KB
+  ▶ PCC #監 → 監_20260415_141649.md
+  ✅ done (375 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_141834.md
+  ✅ done (1181 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_142359.md
+  ⚠ gemini error
+  ✅ done (1055 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_142858.md
+  ✅ done (49 lines)
+  ⏳ sleeping 15s...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 pcc-critic (own)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 14KB
+  ▶ PCC #監 → 監_20260415_143019.md
+  ✅ done (1292 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_143625.md
+  ✅ done (979 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_144110.md
+  ⚠ gemini error
+  ✅ done (1171 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_144557.md
+  ✅ done (349 lines)
+  ⏳ sleeping 15s...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 Antigravity (own)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 97KB
+  ▶ PCC #監 → 監_20260415_144725.md
+  ✅ done (58 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_144826.md
+  ✅ done (276 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_144942.md
+  ✅ done (495 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #極 → 極_20260415_145222.md
+  ✅ done (153 lines)
+  ⏳ sleeping 15s...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 vscode-copilot-chat (fork)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📋 generating context...
+  📏 context size: 0KB
+  ▶ PCC #監 → 監_20260415_145403.md
+  ✅ done (1744 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #刃 → 刃_20260415_150104.md
+  ✅ done (10 lines)
+  ⏳ sleeping 15s...
+  ▶ PCC #探 → 探_20260415_150134.md
