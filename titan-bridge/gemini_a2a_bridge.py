@@ -183,7 +183,8 @@ CLI_SEARCH_DIRS = (
 NEWGATE_PROFILE_PATH = Path(__file__).with_name("newgate_profile.json")
 FUSION_GATE_URL = os.environ.get("GEMINI_A2A_FUSION_GATE_URL", "http://127.0.0.1:9800").rstrip("/")
 USE_FUSION_GATE_FOR_ACP = os.environ.get("GEMINI_A2A_USE_FUSION_GATE", "true").lower() == "true"
-FUSION_GATE_CLI_FALLBACK = os.environ.get("GEMINI_A2A_FUSION_GATE_FALLBACK", "true").lower() == "true"
+FUSION_GATE_CLI_FALLBACK = os.environ.get("GEMINI_A2A_FUSION_GATE_FALLBACK", "false").lower() == "true"
+FUSION_GATE_ALLOW_FAILOVER = os.environ.get("GEMINI_A2A_FUSION_GATE_ALLOW_FAILOVER", "false").lower() == "true"
 
 NEWGATE_SECTION_COMMANDS = {
     "newgate_status": {
@@ -595,9 +596,15 @@ class TaskRecord:
 
 
 class BackendError(RuntimeError):
-    def __init__(self, message: str, status_code: Optional[int] = None):
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.details = dict(details or {})
 
 
 class LocalGeminiA2ABridge:
@@ -621,6 +628,7 @@ class LocalGeminiA2ABridge:
         self.fusion_gate_url = FUSION_GATE_URL
         self.use_fusion_gate_for_acp = USE_FUSION_GATE_FOR_ACP
         self.fusion_gate_cli_fallback = FUSION_GATE_CLI_FALLBACK
+        self.fusion_gate_allow_failover = FUSION_GATE_ALLOW_FAILOVER
         self.tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.RLock()
         self._base_url = f"http://{self.advertise_host}:{self.port}"
@@ -1206,6 +1214,7 @@ class LocalGeminiA2ABridge:
             "provider": provider,
             "use_cache": True,
             "skip_proxy": False,
+            "allow_failover": self.fusion_gate_allow_failover,
         }
         request = Request(
             f"{self.fusion_gate_url}/v1/gate/invoke",
@@ -1219,9 +1228,42 @@ class LocalGeminiA2ABridge:
                 data = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
+            details: Dict[str, Any] = {
+                "gateway": {
+                    "used": True,
+                    "provider": provider,
+                    "url": self.fusion_gate_url,
+                    "allowFailover": self.fusion_gate_allow_failover,
+                    "fallbackEnabled": self.fusion_gate_cli_fallback,
+                }
+            }
+            message = body or error.reason
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict):
+                provider_name = str(payload.get("provider") or provider)
+                details.update(
+                    {
+                        "provider": provider_name,
+                        "reason": payload.get("reason"),
+                        "fromCache": bool(payload.get("from_cache", False)),
+                    }
+                )
+                error_code = str(payload.get("error_code") or "").strip()
+                if error_code:
+                    details["errorCode"] = error_code
+                hint = str(payload.get("hint") or "").strip()
+                if hint:
+                    details["hint"] = hint
+                payload_error = str(payload.get("error") or "").strip()
+                if payload_error:
+                    message = f"Fusion Gate provider {provider_name} failed: {payload_error}"
             raise BackendError(
-                f"Fusion Gate returned HTTP {error.code}: {body or error.reason}",
+                f"Fusion Gate returned HTTP {error.code}: {message}",
                 error.code,
+                details,
             ) from error
         except URLError as error:
             raise BackendError(f"Fusion Gate is unreachable: {error.reason}") from error
@@ -1921,7 +1963,10 @@ class GeminiA2ABridgeHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Not found: {error}"})
             return
         except BackendError as error:
-            self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            payload = {"error": str(error)}
+            if error.details:
+                payload["details"] = error.details
+            self._send_json(HTTPStatus.BAD_GATEWAY, payload)
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown path: {path}"})
@@ -1963,9 +2008,12 @@ class GeminiA2ABridgeHandler(BaseHTTPRequestHandler):
             )
             return
         except BackendError as error:
+            payload: Dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message": str(error)}}
+            if error.details:
+                payload["error"]["data"] = error.details
             self._send_json(
                 HTTPStatus.BAD_GATEWAY,
-                {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message": str(error)}},
+                payload,
             )
             return
 

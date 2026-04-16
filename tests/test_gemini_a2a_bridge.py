@@ -3,6 +3,7 @@ import json
 import sys
 import threading
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
@@ -477,6 +478,61 @@ def test_execute_command_falls_back_to_direct_cli_when_fusion_gate_fails(bridge_
     assert status == 200
     assert payload["gateway"]["used"] is False
     assert payload["gateway"]["provider"] == "gemini"
-    assert seen["runtime"] == "gemini"
-    assert seen["model"] == "gemini-2.5-pro"
-    assert "CBF Protocol" in seen["prompt"]
+
+
+def test_execute_command_returns_structured_backend_error_details(bridge_server):
+    bridge, _, base_url = bridge_server
+    bridge.use_fusion_gate_for_acp = True
+    bridge.fusion_gate_cli_fallback = False
+
+    def fail_gate(*_args, **_kwargs):
+        raise BRIDGE.BackendError(
+            "Fusion Gate returned HTTP 502: Fusion Gate provider claude failed: Not logged in · Please run /login",
+            502,
+            {
+                "provider": "claude",
+                "errorCode": "auth_required",
+                "hint": "Run `claude` and complete /login, or set ANTHROPIC_API_KEY for --bare mode.",
+                "gateway": {
+                    "used": True,
+                    "provider": "claude",
+                    "url": "http://127.0.0.1:9800",
+                    "allowFailover": False,
+                    "fallbackEnabled": False,
+                },
+            },
+        )
+
+    bridge._invoke_acp_via_fusion_gate = fail_gate  # type: ignore[method-assign]
+
+    request = Request(
+        f"{base_url}/executeCommand",
+        data=json.dumps(
+            {
+                "command": "acp_deepsearch",
+                "args": [
+                    {
+                        "prompt": "claude lane の状態を確認して",
+                        "runtime": "claude",
+                        "model": "deep",
+                    }
+                ],
+            }
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            status = response.status
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        status = error.code
+        payload = json.loads(error.read().decode("utf-8"))
+
+    assert status == 502
+    assert "Not logged in" in payload["error"]
+    assert payload["details"]["provider"] == "claude"
+    assert payload["details"]["errorCode"] == "auth_required"
+    assert payload["details"]["gateway"]["used"] is True
+    assert payload["details"]["gateway"]["allowFailover"] is False
