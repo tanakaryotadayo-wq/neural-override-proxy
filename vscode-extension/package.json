@@ -67,6 +67,21 @@
         "icon": "$(light-bulb)"
       },
       {
+        "command": "vortex.runPipelineOne",
+        "title": "VORTEX: Pipeline① を起動",
+        "icon": "$(play)"
+      },
+      {
+        "command": "vortex.openPipelineOneSnapshot",
+        "title": "VORTEX: Pipeline① Snapshot を開く",
+        "icon": "$(json)"
+      },
+      {
+        "command": "vortex.packetizeAntigravity",
+        "title": "VORTEX: Antigravity を Packet 抽出",
+        "icon": "$(package)"
+      },
+      {
         "command": "vortex.openKiQueueSnapshot",
         "title": "VORTEX: KI Queue Snapshot を開く",
         "icon": "$(book)"
@@ -152,6 +167,46 @@
           "type": "string",
           "default": "",
           "description": "KI ベクトル化に使う Colab/Jupyter notebook のパス（空なら自動検出）"
+        },
+        "vortex.antigravityAppPath": {
+          "type": "string",
+          "default": "",
+          "description": "Packet 抽出対象の Antigravity.app パス（空なら /Applications/Antigravity.app）"
+        },
+        "vortex.antigravityPacketScript": {
+          "type": "string",
+          "default": "",
+          "description": "Antigravity packet 抽出スクリプトのパス（空なら ~/Newgate/intelligence/harvest_antigravity_packets.py）"
+        },
+        "vortex.antigravityPacketDbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Packet を書き込む neural_packets.db のパス（空なら ~/Newgate/intelligence/neural_packets.db）"
+        },
+        "vortex.antigravityPacketSummaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Antigravity packet 抽出サマリー JSON の保存先（空なら ~/.gemini/antigravity/antigravity_packet_snapshot.json）"
+        },
+        "vortex.pipelineOneRepoPath": {
+          "type": "string",
+          "default": "",
+          "description": "Pipeline① で packet 化する OSS repo のパス（空なら ~/vscode-oss）"
+        },
+        "vortex.pipelineOneStatusPath": {
+          "type": "string",
+          "default": "",
+          "description": "Pipeline① status JSON のパス（空なら ~/fusion-gate/data/pipeline_01/status.json）"
+        },
+        "vortex.pipelineOneBootstrapScript": {
+          "type": "string",
+          "default": "",
+          "description": "Pipeline① bootstrap script のパス（空なら ~/fusion-gate/scripts/bootstrap_pipeline_01.sh）"
+        },
+        "vortex.pipelineOneRunnerScript": {
+          "type": "string",
+          "default": "",
+          "description": "Pipeline① runner script のパス（空なら ~/fusion-gate/scripts/pipeline_01_runner.py）"
         }
       }
     }

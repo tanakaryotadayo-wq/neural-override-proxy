@@ -35,11 +35,21 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
     const status = getStatus();
     const newgate = status.newgate ?? {};
     const kiQueue = status.kiQueue ?? {};
+    const pipelineOne = status.pipelineOne ?? {};
     const newgateConnected = Boolean(newgate.connected);
     const newgateBadgeClass = newgateConnected ? 'badge-success' : 'badge-failure';
     const newgateBridgeLabel = newgate.bridgeUrl || 'not configured';
     const kiNotebookBadgeClass = kiQueue.notebookExists ? 'badge-success' : 'badge-recovery';
     const kiNotebookLabel = kiQueue.notebookExists ? '準備完了' : '未設定';
+    const pipelineOneStage = pipelineOne.stage || '未起動';
+    const pipelineOneStageBadge = pipelineOneStage === 'completed'
+        ? 'badge-success'
+        : pipelineOneStage === 'failed'
+            ? 'badge-failure'
+            : 'badge-recovery';
+    const pipelineOneMountBadge = pipelineOne.mounted ? 'badge-success' : 'badge-failure';
+    const pipelineOneCbfBadge = pipelineOne.cbfHealthy ? 'badge-success' : 'badge-failure';
+    const pipelineOneN8nBadge = pipelineOne.n8nReady ? 'badge-success' : 'badge-recovery';
 
     // Premium UI Design
     return `<!DOCTYPE html>
@@ -303,6 +313,8 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
         <div class="actions">
             <button class="btn" onclick="postMessage('refresh')">🔄 Refresh</button>
             <button class="btn btn-primary" onclick="postMessage('runAudit')">⚡ Run Audit</button>
+            <button class="btn" onclick="postMessage('packetizeAntigravity')">📦 Antigravity Packet 抽出</button>
+            <button class="btn" onclick="postMessage('runPipelineOne')">🧬 Pipeline① 開始</button>
         </div>
     </div>
 
@@ -397,6 +409,47 @@ export function getDashboardHtml(extensionUri: vscode.Uri, logDir: string, getSt
             </div>
             <div style="margin-top: 10px;">
                 <button class="btn" onclick="postMessage('openKiNotebook')">📓 Colab Notebook を開く</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Pipeline①</h3>
+            <div class="critic-panel">
+                <div>
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Stage:</span>
+                    <span class="badge ${pipelineOneStageBadge}" style="float:right;">${pipelineOneStage}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Drive mount:</span>
+                    <span class="badge ${pipelineOneMountBadge}" style="float:right;">${pipelineOne.mounted ? 'ready' : 'down'}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">CBF:</span>
+                    <span class="badge ${pipelineOneCbfBadge}" style="float:right;">${pipelineOne.cbfHealthy ? 'ready' : 'down'}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">n8n:</span>
+                    <span class="badge ${pipelineOneN8nBadge}" style="float:right;">${pipelineOne.n8nReady ? 'ready' : 'boot'}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Packets:</span>
+                    <span style="float:right;">${pipelineOne.packetCount ?? 0}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">Issues:</span>
+                    <span style="float:right;">${pipelineOne.issueCount ?? 0}</span>
+                </div>
+                <div style="margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.8em;">ECK runs:</span>
+                    <span style="float:right;">${pipelineOne.eckRuns ?? 0}</span>
+                </div>
+            </div>
+            <div class="log-result" style="margin-top: 12px;">${pipelineOne.repoPath || 'repo 未設定'}</div>
+            <div style="margin-top: 8px; color: var(--text-muted); font-size: 0.78em;">${pipelineOne.mountPath || 'mount 未設定'}</div>
+            ${pipelineOne.error ? `<div style="margin-top: 8px; color: var(--warning); font-size: 0.8em;">${pipelineOne.error}</div>` : ''}
+            <div class="actions" style="margin-top: 12px;">
+                <button class="btn" onclick="postMessage('runPipelineOne')">▶ 開始</button>
+                <button class="btn" onclick="postMessage('openPipelineOne')">📄 Snapshot</button>
             </div>
         </div>
     </div>

@@ -23,6 +23,51 @@ const DEFAULT_KI_COLAB_NOTEBOOK = path.join(
   process.env.HOME ?? '/Users/ryyota',
   'Newgate/ki_agent_system/colab_ki_vectorizer.ipynb'
 );
+const DEFAULT_ANTIGRAVITY_APP_PATH = '/Applications/Antigravity.app';
+const DEFAULT_ANTIGRAVITY_PACKET_SCRIPT = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'Newgate/intelligence/harvest_antigravity_packets.py'
+);
+const DEFAULT_ANTIGRAVITY_PACKET_DB_PATH = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'Newgate/intelligence/neural_packets.db'
+);
+const DEFAULT_ANTIGRAVITY_PACKET_SUMMARY_PATH = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  '.gemini/antigravity/antigravity_packet_snapshot.json'
+);
+const DEFAULT_PIPELINE_ONE_REPO_PATH = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'vscode-oss'
+);
+const DEFAULT_PIPELINE_ONE_STATUS_PATH = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'fusion-gate/data/pipeline_01/status.json'
+);
+const DEFAULT_PIPELINE_ONE_BOOTSTRAP_SCRIPT = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'fusion-gate/scripts/bootstrap_pipeline_01.sh'
+);
+const DEFAULT_PIPELINE_ONE_RUNNER_SCRIPT = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'fusion-gate/scripts/pipeline_01_runner.py'
+);
+const DEFAULT_ANTIGRAVITY_EXTENSIONS_DIR = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  '.antigravity/extensions'
+);
+const DEFAULT_ANTIGRAVITY_DISABLED_EXTENSIONS_DIR = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  '.antigravity/disabled-extensions'
+);
+const DEFAULT_ANTIGRAVITY_WORKSPACE_STORAGE = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'Library/Application Support/Antigravity/User/workspaceStorage'
+);
+const DEFAULT_ANTIGRAVITY_SETTINGS_PATH = path.join(
+  process.env.HOME ?? '/Users/ryyota',
+  'Library/Application Support/Antigravity/User/settings.json'
+);
 
 interface NewgateStatus {
   connected: boolean;
@@ -64,6 +109,21 @@ interface KiQueueStatus {
   latestPendingTitle: string | null;
 }
 
+interface PipelineOneStatus {
+  configured: boolean;
+  statusPath: string;
+  repoPath: string;
+  mountPath: string;
+  stage: string;
+  mounted: boolean;
+  cbfHealthy: boolean;
+  n8nReady: boolean;
+  packetCount: number;
+  issueCount: number;
+  eckRuns: number;
+  error?: string;
+}
+
 function getKiQueueFile(): string {
   return vscode.workspace.getConfiguration('vortex').get<string>('kiQueueFile')?.trim() || DEFAULT_KI_QUEUE_FILE;
 }
@@ -74,6 +134,38 @@ function getKiKnowledgeDir(): string {
 
 function getKiColabNotebook(): string {
   return vscode.workspace.getConfiguration('vortex').get<string>('kiColabNotebook')?.trim() || DEFAULT_KI_COLAB_NOTEBOOK;
+}
+
+function getAntigravityAppPath(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('antigravityAppPath')?.trim() || DEFAULT_ANTIGRAVITY_APP_PATH;
+}
+
+function getAntigravityPacketScript(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('antigravityPacketScript')?.trim() || DEFAULT_ANTIGRAVITY_PACKET_SCRIPT;
+}
+
+function getAntigravityPacketDbPath(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('antigravityPacketDbPath')?.trim() || DEFAULT_ANTIGRAVITY_PACKET_DB_PATH;
+}
+
+function getAntigravityPacketSummaryPath(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('antigravityPacketSummaryPath')?.trim() || DEFAULT_ANTIGRAVITY_PACKET_SUMMARY_PATH;
+}
+
+function getPipelineOneRepoPath(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('pipelineOneRepoPath')?.trim() || DEFAULT_PIPELINE_ONE_REPO_PATH;
+}
+
+function getPipelineOneStatusPath(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('pipelineOneStatusPath')?.trim() || DEFAULT_PIPELINE_ONE_STATUS_PATH;
+}
+
+function getPipelineOneBootstrapScript(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('pipelineOneBootstrapScript')?.trim() || DEFAULT_PIPELINE_ONE_BOOTSTRAP_SCRIPT;
+}
+
+function getPipelineOneRunnerScript(): string {
+  return vscode.workspace.getConfiguration('vortex').get<string>('pipelineOneRunnerScript')?.trim() || DEFAULT_PIPELINE_ONE_RUNNER_SCRIPT;
 }
 
 function slugifyKiName(value: string, fallback = 'ki_candidate'): string {
@@ -130,6 +222,60 @@ async function fetchKiQueueStatus(): Promise<KiQueueStatus> {
     promotedCount: promotedEntries.length,
     latestPendingTitle: pendingEntries[0]?.title ?? null,
   };
+}
+
+async function fetchPipelineOneStatus(): Promise<PipelineOneStatus> {
+  const statusPath = getPipelineOneStatusPath();
+  const repoPath = getPipelineOneRepoPath();
+  if (!fs.existsSync(statusPath)) {
+    return {
+      configured: false,
+      statusPath,
+      repoPath,
+      mountPath: path.join(process.env.HOME ?? '/Users/ryyota', 'GoogleDriveCache/oss'),
+      stage: '未起動',
+      mounted: false,
+      cbfHealthy: false,
+      n8nReady: false,
+      packetCount: 0,
+      issueCount: 0,
+      eckRuns: 0,
+      error: 'status.json がまだありません',
+    };
+  }
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+    return {
+      configured: true,
+      statusPath,
+      repoPath: String(raw.repo_path ?? raw.repoPath ?? repoPath),
+      mountPath: String(raw.mount_path ?? raw.mountPath ?? path.join(process.env.HOME ?? '/Users/ryyota', 'GoogleDriveCache/oss')),
+      stage: String(raw.stage ?? '不明'),
+      mounted: Boolean(raw.mounted ?? false),
+      cbfHealthy: Boolean(raw.cbfHealthy ?? raw.cbf?.packetized),
+      n8nReady: Boolean(raw.n8nReady ?? false),
+      packetCount: Number(raw.packet_summary?.count ?? raw.packetCount ?? 0),
+      issueCount: Number(raw.issue_count ?? raw.issueCount ?? 0),
+      eckRuns: Number(raw.eck?.bridge?.runs ?? raw.eckRuns ?? 0),
+      error: raw.error ? String(raw.error) : undefined,
+    };
+  } catch (error: any) {
+    return {
+      configured: false,
+      statusPath,
+      repoPath,
+      mountPath: path.join(process.env.HOME ?? '/Users/ryyota', 'GoogleDriveCache/oss'),
+      stage: '読み込み失敗',
+      mounted: false,
+      cbfHealthy: false,
+      n8nReady: false,
+      packetCount: 0,
+      issueCount: 0,
+      eckRuns: 0,
+      error: error?.message ?? 'status parse failed',
+    };
+  }
 }
 
 function buildKiArtifactMarkdown(entry: KiQueueEntry, title: string): string {
@@ -357,6 +503,142 @@ async function runVortexAudit(code: string, workspaceRoot: string, context: vsco
   });
 }
 
+interface PacketHarvestResult {
+  stdout: string;
+  stderr: string;
+  summaryPath: string;
+}
+
+async function runAntigravityPacketHarvest(): Promise<PacketHarvestResult> {
+  const scriptPath = getAntigravityPacketScript();
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`packet script not found: ${scriptPath}`);
+  }
+
+  const summaryPath = getAntigravityPacketSummaryPath();
+  fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
+
+  const args = [
+    scriptPath,
+    '--app-path', getAntigravityAppPath(),
+    '--extensions-dir', DEFAULT_ANTIGRAVITY_EXTENSIONS_DIR,
+    '--disabled-extensions-dir', DEFAULT_ANTIGRAVITY_DISABLED_EXTENSIONS_DIR,
+    '--workspace-storage', DEFAULT_ANTIGRAVITY_WORKSPACE_STORAGE,
+    '--settings-path', DEFAULT_ANTIGRAVITY_SETTINGS_PATH,
+    '--db-path', getAntigravityPacketDbPath(),
+    '--summary-path', summaryPath,
+  ];
+
+  return new Promise<PacketHarvestResult>((resolve, reject) => {
+    const proc = cp.spawn('python3', args, {
+      cwd: path.dirname(scriptPath),
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        proc.kill();
+        reject(new Error('Antigravity packet harvest timed out after 120s'));
+      }
+    }, 120000);
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+    proc.on('error', (error) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+    proc.on('close', (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr, summaryPath });
+      } else {
+        reject(new Error(stderr.trim() || stdout.trim() || `packet harvest exited with code ${code}`));
+      }
+    });
+  });
+}
+
+async function runPipelineOneScripts(): Promise<{ stdout: string; stderr: string; statusPath: string }> {
+  const bootstrapScript = getPipelineOneBootstrapScript();
+  const runnerScript = getPipelineOneRunnerScript();
+  const statusPath = getPipelineOneStatusPath();
+  const repoPath = getPipelineOneRepoPath();
+
+  if (!fs.existsSync(bootstrapScript)) {
+    throw new Error(`pipeline bootstrap script not found: ${bootstrapScript}`);
+  }
+  if (!fs.existsSync(runnerScript)) {
+    throw new Error(`pipeline runner script not found: ${runnerScript}`);
+  }
+
+  const runProcess = (command: string, args: string[], cwd: string, timeoutMs: number) =>
+    new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const proc = cp.spawn(command, args, { cwd });
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          proc.kill();
+          reject(new Error(`${path.basename(args[0] ?? command)} timed out after ${Math.round(timeoutMs / 1000)}s`));
+        }
+      }, timeoutMs);
+
+      proc.stdout.on('data', (data) => { stdout += data.toString(); });
+      proc.stderr.on('data', (data) => { stderr += data.toString(); });
+      proc.on('error', (error) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        }
+      });
+      proc.on('close', (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(new Error(stderr.trim() || stdout.trim() || `${command} exited with code ${code}`));
+        }
+      });
+    });
+
+  const bootstrap = await runProcess('/bin/bash', [bootstrapScript], path.dirname(bootstrapScript), 120000);
+  const runner = await runProcess(
+    'python3',
+    [
+      runnerScript,
+      '--repo-path', repoPath,
+      '--repo-name', path.basename(repoPath),
+      '--status-path', statusPath,
+    ],
+    path.dirname(runnerScript),
+    300000,
+  );
+
+  return {
+    stdout: [bootstrap.stdout.trim(), runner.stdout.trim()].filter(Boolean).join('\n\n'),
+    stderr: [bootstrap.stderr.trim(), runner.stderr.trim()].filter(Boolean).join('\n\n'),
+    statusPath,
+  };
+}
+
 // ── Sidebar: Webview Provider ───────────────────────────────────────────────
 
 class VortexSidebarProvider implements vscode.WebviewViewProvider {
@@ -379,6 +661,7 @@ class VortexSidebarProvider implements vscode.WebviewViewProvider {
         lastVerdict: lastAuditResult?.verdict || null,
         newgate: await fetchNewgateStatus(),
         kiQueue: await fetchKiQueueStatus(),
+        pipelineOne: await fetchPipelineOneStatus(),
       };
       webviewView.webview.html = getDashboardHtml(this._extensionUri, FLEET_LOG_DIR, () => status);
     };
@@ -390,6 +673,8 @@ class VortexSidebarProvider implements vscode.WebviewViewProvider {
         void updateWebview();
       } else if (msg.command === 'runAudit') {
         vscode.commands.executeCommand('vortex.runAudit');
+      } else if (msg.command === 'packetizeAntigravity') {
+        vscode.commands.executeCommand('vortex.packetizeAntigravity');
       } else if (msg.command === 'openNewgate') {
         vscode.commands.executeCommand('vortex.openNewgateSnapshot');
       } else if (msg.command === 'openKiQueue') {
@@ -398,6 +683,10 @@ class VortexSidebarProvider implements vscode.WebviewViewProvider {
         vscode.commands.executeCommand('vortex.openKiColabNotebook');
       } else if (msg.command === 'promoteKi') {
         vscode.commands.executeCommand('vortex.promoteKiCandidate');
+      } else if (msg.command === 'runPipelineOne') {
+        vscode.commands.executeCommand('vortex.runPipelineOne');
+      } else if (msg.command === 'openPipelineOne') {
+        vscode.commands.executeCommand('vortex.openPipelineOneSnapshot');
       }
     });
   }
@@ -614,6 +903,88 @@ export function activate(context: vscode.ExtensionContext) {
         content: JSON.stringify(snapshot, null, 2),
       });
       await vscode.window.showTextDocument(doc, { preview: false });
+    }),
+
+    vscode.commands.registerCommand('vortex.runPipelineOne', async () => {
+      const channel = vscode.window.createOutputChannel('VORTEX Pipeline 1');
+      channel.clear();
+      channel.appendLine('=== Pipeline 1: OSS -> Claude -> Gemini -> ECK ===');
+      channel.appendLine(`repoPath: ${getPipelineOneRepoPath()}`);
+      channel.appendLine(`statusPath: ${getPipelineOneStatusPath()}`);
+
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: '🧬 Pipeline① を起動中...' },
+        async () => {
+          try {
+            const result = await runPipelineOneScripts();
+            if (result.stdout.trim()) {
+              channel.appendLine(result.stdout.trim());
+            }
+            if (result.stderr.trim()) {
+              channel.appendLine('\n--- STDERR ---');
+              channel.appendLine(result.stderr.trim());
+            }
+            channel.show(true);
+            if (fs.existsSync(result.statusPath)) {
+              const doc = await vscode.workspace.openTextDocument(result.statusPath);
+              await vscode.window.showTextDocument(doc, { preview: false });
+            }
+            void sidebarProvider.refresh();
+            vscode.window.showInformationMessage('Pipeline① を起動しました');
+          } catch (error: any) {
+            channel.appendLine('\n--- ERROR ---');
+            channel.appendLine(String(error?.message ?? error));
+            channel.show(true);
+            void sidebarProvider.refresh();
+            vscode.window.showErrorMessage(`Pipeline① の起動に失敗: ${error?.message ?? error}`);
+          }
+        }
+      );
+    }),
+
+    vscode.commands.registerCommand('vortex.openPipelineOneSnapshot', async () => {
+      const statusPath = getPipelineOneStatusPath();
+      if (!fs.existsSync(statusPath)) {
+        vscode.window.showWarningMessage(`Pipeline① status が見つからない: ${statusPath}`);
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument(statusPath);
+      await vscode.window.showTextDocument(doc, { preview: false });
+    }),
+
+    vscode.commands.registerCommand('vortex.packetizeAntigravity', async () => {
+      const channel = vscode.window.createOutputChannel('VORTEX Antigravity Packets');
+      channel.clear();
+      channel.appendLine('=== Antigravity Packet Harvest ===');
+      channel.appendLine(`appPath: ${getAntigravityAppPath()}`);
+      channel.appendLine(`dbPath: ${getAntigravityPacketDbPath()}`);
+      channel.appendLine(`summaryPath: ${getAntigravityPacketSummaryPath()}`);
+
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: '📦 Antigravity を Packet 抽出中...' },
+        async () => {
+          try {
+            const result = await runAntigravityPacketHarvest();
+            if (result.stdout.trim()) {
+              channel.appendLine(result.stdout.trim());
+            }
+            if (result.stderr.trim()) {
+              channel.appendLine('\n--- STDERR ---');
+              channel.appendLine(result.stderr.trim());
+            }
+            channel.show(true);
+
+            const doc = await vscode.workspace.openTextDocument(result.summaryPath);
+            await vscode.window.showTextDocument(doc, { preview: false });
+            vscode.window.showInformationMessage('Antigravity packet 抽出が完了しました');
+          } catch (error: any) {
+            channel.appendLine('\n--- ERROR ---');
+            channel.appendLine(String(error?.message ?? error));
+            channel.show(true);
+            vscode.window.showErrorMessage(`Antigravity packet 抽出に失敗: ${error?.message ?? error}`);
+          }
+        }
+      );
     }),
 
     vscode.commands.registerCommand('vortex.openKiQueueSnapshot', async () => {
