@@ -181,6 +181,9 @@ CLI_SEARCH_DIRS = (
 )
 
 NEWGATE_PROFILE_PATH = Path(__file__).with_name("newgate_profile.json")
+FUSION_GATE_URL = os.environ.get("GEMINI_A2A_FUSION_GATE_URL", "http://127.0.0.1:9800").rstrip("/")
+USE_FUSION_GATE_FOR_ACP = os.environ.get("GEMINI_A2A_USE_FUSION_GATE", "true").lower() == "true"
+FUSION_GATE_CLI_FALLBACK = os.environ.get("GEMINI_A2A_FUSION_GATE_FALLBACK", "true").lower() == "true"
 
 NEWGATE_SECTION_COMMANDS = {
     "newgate_status": {
@@ -221,6 +224,19 @@ if _PCC_CRITIC_PATH.exists():
     if spec and spec.loader:
         _PCC_CRITIC = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_PCC_CRITIC)
+
+_CBF_MODULE = None
+_CBF_MODULE_PATH = Path(
+    os.environ.get(
+        "NEWGATE_CBF_MODULE",
+        str(Path.home() / "Newgate" / "gate" / "cbf.py"),
+    )
+).expanduser()
+if _CBF_MODULE_PATH.exists():
+    spec = importlib.util.spec_from_file_location("bridge_cbf", _CBF_MODULE_PATH)
+    if spec and spec.loader:
+        _CBF_MODULE = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_CBF_MODULE)
 
 
 def clone_json(value: Any) -> Any:
@@ -602,6 +618,9 @@ class LocalGeminiA2ABridge:
             name: AcpCommandSpec(name=name, **config) for name, config in ACP_COMMAND_DEFAULTS.items()
         }
         self.newgate_profile = load_newgate_profile()
+        self.fusion_gate_url = FUSION_GATE_URL
+        self.use_fusion_gate_for_acp = USE_FUSION_GATE_FOR_ACP
+        self.fusion_gate_cli_fallback = FUSION_GATE_CLI_FALLBACK
         self.tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.RLock()
         self._base_url = f"http://{self.advertise_host}:{self.port}"
@@ -964,6 +983,131 @@ class LocalGeminiA2ABridge:
         options = self._normalize_acp_args(spec, args)
         return self._run_acp_command(spec, options, options["prompt"])
 
+    def _build_cbf_context(self, spec: AcpCommandSpec, prompt_text: str) -> Dict[str, Any]:
+        if _CBF_MODULE is None:
+            return {
+                "available": False,
+                "reason": "cbf_module_missing",
+            }
+
+        try:
+            engine = _CBF_MODULE.CBFEngine(use_history=False)
+            saved = engine.load_log()
+            history_stats = _CBF_MODULE.CBFHistory().get_stats()
+            current_position = saved.get("current_position")
+            if not current_position:
+                recent = (history_stats or {}).get("recent", [])
+                if recent:
+                    current_position = recent[0].get("corrected") or recent[0].get("actual")
+
+            recommended = self._recommend_cbf_coordinate(spec, prompt_text, history_stats)
+            parsed_current = self._parse_cbf_position(current_position)
+            distance = (
+                self._cbf_distance(parsed_current, recommended)
+                if parsed_current is not None
+                else None
+            )
+
+            lines = [
+                "[CBF Protocol]",
+                f"Current position: {current_position or 'untracked'}",
+                (
+                    f"Recommended step: {recommended['text']} "
+                    f"({recommended['stageName']}, reason: {recommended['reason']})"
+                ),
+            ]
+            if distance is not None:
+                lines.append(f"Distance from current: {distance:.2f}")
+            lines.append(f"Recorded drifts: {int((history_stats or {}).get('total_drifts', 0))}")
+            lines.append(
+                "Respect the recommended coordinate unless the user explicitly requires a different stage."
+            )
+            return {
+                "available": True,
+                "currentPosition": current_position,
+                "recommendedStep": recommended,
+                "distanceFromCurrent": distance,
+                "totalDrifts": int((history_stats or {}).get("total_drifts", 0)),
+                "protocol": "\n".join(lines),
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "reason": "cbf_unavailable",
+                "error": str(exc),
+            }
+
+    def _recommend_cbf_coordinate(
+        self,
+        spec: AcpCommandSpec,
+        prompt_text: str,
+        history_stats: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        lowered = f"{spec.name} {spec.mode_prompt} {prompt_text}".lower()
+        stage = 1
+        reason = "research-default"
+        if spec.name == "acp_deepthink" or any(
+            token in lowered for token in ("architecture", "design", "設計", "構想", "tradeoff")
+        ):
+            stage = 2
+            reason = "deepthink-design"
+        elif any(
+            token in lowered for token in ("implement", "implementation", "fix", "patch", "実装", "修正")
+        ):
+            stage = 3
+            reason = "implementation-keywords"
+
+        layer = 2 if any(
+            token in lowered
+            for token in (
+                "extension",
+                "workspace",
+                "session",
+                "lane",
+                "status bar",
+                "tree view",
+                "sidebar",
+                "hook",
+                "integration",
+                "統合",
+            )
+        ) else 3
+
+        hard_drifts = int((history_stats or {}).get("status_counts", {}).get("drift", 0))
+        total_drifts = int((history_stats or {}).get("total_drifts", 0))
+        base_stability = 4 if stage in (1, 2) else 5
+        stability = max(2, min(9, base_stability - min(hard_drifts, 2) - min(total_drifts // 300, 1)))
+
+        return {
+            "x": stage,
+            "y": layer,
+            "z": stability,
+            "text": f"[{stage}.{layer}.{stability}]",
+            "stageName": {
+                1: "Planning",
+                2: "Design",
+                3: "Implementation",
+                4: "Integration",
+                5: "Deployment",
+            }.get(stage, f"Stage-{stage}"),
+            "reason": reason,
+        }
+
+    def _parse_cbf_position(self, text: Any) -> Optional[Tuple[int, int, int]]:
+        if not isinstance(text, str):
+            return None
+        match = re.match(r"^\[(\d+)\.(\d+)\.(\d+)\]$", text.strip())
+        if not match:
+            return None
+        return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+    def _cbf_distance(self, current: Tuple[int, int, int], recommended: Dict[str, Any]) -> float:
+        return float(
+            abs(recommended["x"] - current[0]) * 3.0
+            + abs(recommended["y"] - current[1]) * 1.0
+            + abs(recommended["z"] - current[2]) * 0.3
+        )
+
     def _run_acp_command(
         self,
         spec: AcpCommandSpec,
@@ -972,8 +1116,13 @@ class LocalGeminiA2ABridge:
         command_name: Optional[str] = None,
         public_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
+        cbf = self._build_cbf_context(spec, prompt_text)
+        prompt_parts = [spec.mode_prompt]
+        if cbf.get("protocol"):
+            prompt_parts.append(str(cbf["protocol"]))
+        prompt_parts.append(f"---\n{prompt_text}")
         final_prompt = inject_pcc_prompt(
-            f"{spec.mode_prompt}\n---\n{prompt_text}",
+            "\n\n".join(prompt_parts),
             options["preset"],
         )
         result = self._invoke_acp_cli(
@@ -992,6 +1141,14 @@ class LocalGeminiA2ABridge:
             "prompt": public_prompt if public_prompt is not None else options["prompt"],
             "response": result["text"],
             "audit": audit,
+            "cbf": cbf,
+            "gateway": {
+                "used": bool(result.get("gateway_used", False)),
+                "provider": result.get("provider"),
+                "fromCache": bool(result.get("from_cache", False)),
+                "reason": result.get("reason"),
+                "url": self.fusion_gate_url if result.get("gateway_used", False) else None,
+            },
             "exitCode": result["exit_code"],
             "elapsed": result["elapsed"],
             "invocation": result["command"],
@@ -1034,6 +1191,74 @@ class LocalGeminiA2ABridge:
         }
 
     def _invoke_acp_cli(self, runtime: str, prompt: str, model: str, timeout: int) -> Dict[str, Any]:
+        if self.use_fusion_gate_for_acp:
+            try:
+                return self._invoke_acp_via_fusion_gate(runtime, prompt, model, timeout)
+            except BackendError:
+                if not self.fusion_gate_cli_fallback:
+                    raise
+        return self._invoke_acp_direct_cli(runtime, prompt, model, timeout)
+
+    def _invoke_acp_via_fusion_gate(self, runtime: str, prompt: str, model: str, timeout: int) -> Dict[str, Any]:
+        provider = self._fusion_gate_provider(runtime, model)
+        payload = {
+            "prompt": prompt,
+            "provider": provider,
+            "use_cache": True,
+            "skip_proxy": False,
+        }
+        request = Request(
+            f"{self.fusion_gate_url}/v1/gate/invoke",
+            data=json_bytes(payload),
+            headers={"Content-Type": JSON_CONTENT_TYPE, "Accept": JSON_CONTENT_TYPE},
+            method="POST",
+        )
+        started = time.monotonic()
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            raise BackendError(
+                f"Fusion Gate returned HTTP {error.code}: {body or error.reason}",
+                error.code,
+            ) from error
+        except URLError as error:
+            raise BackendError(f"Fusion Gate is unreachable: {error.reason}") from error
+        except TimeoutError as error:
+            raise BackendError(f"Fusion Gate timed out after {timeout}s.") from error
+        except json.JSONDecodeError as error:
+            raise BackendError("Fusion Gate returned invalid JSON.") from error
+
+        text = str(data.get("response", "") or "").strip()
+        if not text:
+            error_text = str(data.get("error", "") or "").strip()
+            if error_text:
+                raise BackendError(f"Fusion Gate provider {provider} failed: {error_text}")
+            raise BackendError(f"Fusion Gate provider {provider} returned no output.")
+
+        return {
+            "text": text,
+            "exit_code": 0,
+            "elapsed": round(float(data.get("latency_ms", (time.monotonic() - started) * 1000.0)) / 1000.0, 1),
+            "command": ["fusion-gate", provider],
+            "provider": str(data.get("provider") or provider),
+            "reason": str(data.get("reason") or ""),
+            "from_cache": bool(data.get("from_cache", False)),
+            "gateway_used": True,
+        }
+
+    def _fusion_gate_provider(self, runtime: str, model: str) -> str:
+        if runtime == "gemini":
+            return "gemini"
+        if runtime == "claude":
+            return "claude"
+        if runtime == "copilot":
+            lowered = model.lower()
+            return "copilot_mini" if "mini" in lowered else "copilot"
+        raise BackendError(f"Unsupported runtime: {runtime}")
+
+    def _invoke_acp_direct_cli(self, runtime: str, prompt: str, model: str, timeout: int) -> Dict[str, Any]:
         env = os.environ.copy()
         existing_path = env.get("PATH", "")
         prepend = [directory for directory in CLI_SEARCH_DIRS if os.path.isdir(directory)]
@@ -1072,6 +1297,10 @@ class LocalGeminiA2ABridge:
             "exit_code": result.returncode,
             "elapsed": round(time.monotonic() - started, 1),
             "command": command,
+            "provider": runtime,
+            "reason": "direct_cli",
+            "from_cache": False,
+            "gateway_used": False,
         }
 
     def _build_acp_command(self, binary_path: str, runtime: str, prompt: str, model: str) -> List[str]:

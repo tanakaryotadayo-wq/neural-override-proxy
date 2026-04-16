@@ -382,3 +382,101 @@ def test_execute_command_runs_newgate_deepsearch_with_embedded_context(bridge_se
     assert seen["timeout"] == 21
     assert "[Newgate Context]" in seen["prompt"]
     assert "qwen3-embedding-8b" in seen["prompt"]
+
+
+def test_execute_command_uses_fusion_gate_for_acp_when_enabled(bridge_server):
+    bridge, _, base_url = bridge_server
+    bridge.use_fusion_gate_for_acp = True
+    bridge.fusion_gate_cli_fallback = False
+    seen = {}
+
+    def fake_gate(runtime, prompt, model, timeout):
+        seen.update({"runtime": runtime, "prompt": prompt, "model": model, "timeout": timeout})
+        return {
+            "text": "However the lane contract is still underspecified and needs concrete adapter boundaries.",
+            "exit_code": 0,
+            "elapsed": 0.5,
+            "command": ["fusion-gate", "claude"],
+            "provider": "claude",
+            "reason": "preferred_by_user",
+            "from_cache": True,
+            "gateway_used": True,
+        }
+
+    def fail_direct(*_args, **_kwargs):
+        raise AssertionError("direct CLI should not be used when Fusion Gate succeeds")
+
+    bridge._invoke_acp_via_fusion_gate = fake_gate  # type: ignore[method-assign]
+    bridge._invoke_acp_direct_cli = fail_direct  # type: ignore[method-assign]
+
+    status, _, payload = post_json(
+        f"{base_url}/executeCommand",
+        {
+            "command": "acp_deepthink",
+            "args": [
+                {
+                    "prompt": "lane contract の不足を洗って",
+                    "runtime": "claude",
+                    "model": "sonnet",
+                    "timeout": 18,
+                }
+            ],
+        },
+    )
+
+    assert status == 200
+    assert payload["gateway"]["used"] is True
+    assert payload["gateway"]["provider"] == "claude"
+    assert payload["gateway"]["fromCache"] is True
+    assert seen["runtime"] == "claude"
+    assert seen["model"] == "sonnet"
+    assert "CBF Protocol" in seen["prompt"]
+    assert "PCC Protocol" in seen["prompt"]
+
+
+def test_execute_command_falls_back_to_direct_cli_when_fusion_gate_fails(bridge_server):
+    bridge, _, base_url = bridge_server
+    bridge.use_fusion_gate_for_acp = True
+    bridge.fusion_gate_cli_fallback = True
+    seen = {}
+
+    def fail_gate(*_args, **_kwargs):
+        raise BRIDGE.BackendError("Fusion Gate unavailable")
+
+    def fake_direct(runtime, prompt, model, timeout):
+        seen.update({"runtime": runtime, "prompt": prompt, "model": model, "timeout": timeout})
+        return {
+            "text": "Specifically the missing issue is timeout handling on the fallback lane.",
+            "exit_code": 0,
+            "elapsed": 0.7,
+            "command": ["fake-cli", runtime],
+            "provider": runtime,
+            "reason": "direct_cli",
+            "from_cache": False,
+            "gateway_used": False,
+        }
+
+    bridge._invoke_acp_via_fusion_gate = fail_gate  # type: ignore[method-assign]
+    bridge._invoke_acp_direct_cli = fake_direct  # type: ignore[method-assign]
+
+    status, _, payload = post_json(
+        f"{base_url}/executeCommand",
+        {
+            "command": "acp_deepsearch",
+            "args": [
+                {
+                    "prompt": "fallback lane の欠点を探して",
+                    "runtime": "gemini",
+                    "model": "standard",
+                    "timeout": 19,
+                }
+            ],
+        },
+    )
+
+    assert status == 200
+    assert payload["gateway"]["used"] is False
+    assert payload["gateway"]["provider"] == "gemini"
+    assert seen["runtime"] == "gemini"
+    assert seen["model"] == "gemini-2.5-pro"
+    assert "CBF Protocol" in seen["prompt"]
