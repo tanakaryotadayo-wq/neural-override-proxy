@@ -456,6 +456,13 @@ def cmd_status(args):
     print()
     print(t(GRAY, "  " + "─" * 60))
 
+    # ニックネーム逆引き: port → nickname
+    port_to_nick = {
+        cfg.get("port"): name
+        for name, cfg in _models().items()
+        if cfg.get("port")
+    }
+
     found_any = False
     for port in scan_ports:
         url = f"http://localhost:{port}/v1/models"
@@ -468,22 +475,23 @@ def cmd_status(args):
                 model_ids = [m["id"] for m in data.get("data", [])]
                 for mid in model_ids:
                     found_any = True
-                    # 短縮表示（長すぎる場合は屑尾を勝る）
-                    label = mid if len(mid) <= 45 else mid[:42] + "..."
+                    nick = port_to_nick.get(port, "")
+                    nick_str = t(MAGENTA, BOLD + f"[{nick}]" + R) + "  " if nick else ""
+                    label = mid if len(mid) <= 40 else mid[:37] + "..."
                     print(
                         f"  {t(GREEN, '●')}  "
+                        f"{nick_str}"
                         f":{t(BOLD, str(port))}  "
                         f"{t(CYAN, label)}  "
                         f"{t(GRAY, str(ms) + 'ms')}"
                     )
         except (urllib.error.URLError, OSError):
-            # ポートが広いので死んでるものはスキップ（クリーンな出力のため）
             pass
         except Exception as e:
             print(f"  {t(YELLOW, '?')}  :{port}  {t(GRAY, str(e)[:40])}")
 
     if not found_any:
-        print(f"  {t(GRAY, '(no local servers found on ports ' + str(scan_ports) + ')')}")
+        print(f"  {t(GRAY, '(no local servers found)')}")
 
     print(t(GRAY, "  " + "─" * 60))
 
