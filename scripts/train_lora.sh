@@ -164,9 +164,14 @@ if [ "$merge" = "y" ]; then
         --save-path "$MERGED_DIR"
     echo "  ✅ Merged model: $MERGED_DIR"
     echo ""
-    echo "  To serve: mlx_lm.server --model $MERGED_DIR --port 8102"
+    echo "  To serve (vLLM MLX):"
+    echo "    vllm serve $MERGED_DIR --device mlx --port 8102 --served-model-name ryota-core"
 fi
 
 echo ""
-echo "Done. To serve with adapter (no merge):"
+echo "Done. To serve (vLLM MLX):"
+echo "  # Merged (recommended):"
+echo "  vllm serve $MERGED_DIR --device mlx --port 8102 --served-model-name ryota-core"
+echo ""
+echo "  # With adapter (no merge):"
 echo "  python3 -m mlx_lm.server --model $MODEL_NAME --adapter-path $ADAPTER_DIR --port 8102"
