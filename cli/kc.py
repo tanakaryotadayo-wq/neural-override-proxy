@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -439,6 +440,104 @@ def cmd_suggest(args):
     return 0
 
 
+def cmd_status(args):
+    """
+    現在起動中のローカルAIサーバーを全部スキャンして一覧表示。
+    /v1/models を実際に叩いてなにが動いてるか確認する。
+    """
+    _init()
+
+    # デフォルトスキャン対象ポート
+    scan_ports = [8101, 8102, 8103, 8104, 8765, 9700, 9800]
+
+    print()
+    print(t(BOLD, "  🖥️  Running AI Servers"))
+    print(t(GRAY, f"  Scanned: {time.strftime('%H:%M:%S')}  —  MacBook Air (this machine)"))
+    print()
+    print(t(GRAY, "  " + "─" * 60))
+
+    found_any = False
+    for port in scan_ports:
+        url = f"http://localhost:{port}/v1/models"
+        t0 = time.time()
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                ms = int((time.time() - t0) * 1000)
+                data = json.loads(resp.read())
+                model_ids = [m["id"] for m in data.get("data", [])]
+                for mid in model_ids:
+                    found_any = True
+                    # 短縮表示（長すぎる場合は屑尾を勝る）
+                    label = mid if len(mid) <= 45 else mid[:42] + "..."
+                    print(
+                        f"  {t(GREEN, '●')}  "
+                        f":{t(BOLD, str(port))}  "
+                        f"{t(CYAN, label)}  "
+                        f"{t(GRAY, str(ms) + 'ms')}"
+                    )
+        except (urllib.error.URLError, OSError):
+            # ポートが広いので死んでるものはスキップ（クリーンな出力のため）
+            pass
+        except Exception as e:
+            print(f"  {t(YELLOW, '?')}  :{port}  {t(GRAY, str(e)[:40])}")
+
+    if not found_any:
+        print(f"  {t(GRAY, '(no local servers found on ports ' + str(scan_ports) + ')')}")
+
+    print(t(GRAY, "  " + "─" * 60))
+
+    # ─── vLLM プロセス情報 — PID ・メモリ・ポート ───────────────────
+    print()
+    print(t(BOLD, "  🔎  Process Detail (vLLM / mlx_lm)"))
+    print()
+    try:
+        ps_out = subprocess.check_output(
+            ["ps", "ax", "-o", "pid,rss,command"],
+            text=True,
+        )
+        for line in ps_out.splitlines():
+            if "vllm" in line.lower() and "grep" not in line:
+                parts = line.split(None, 2)
+                if len(parts) < 3:
+                    continue
+                pid, rss_kb = parts[0], parts[1]
+                cmd = parts[2]
+
+                # ポートを抽出
+                port_str = ""
+                if "--port" in cmd:
+                    idx = cmd.split().index("--port")
+                    port_str = cmd.split()[idx + 1] if idx + 1 < len(cmd.split()) else ""
+
+                # メモリを GB に
+                try:
+                    mem_gb = f"{int(rss_kb) / 1_048_576:.1f} GB"
+                except ValueError:
+                    mem_gb = rss_kb
+
+                # サーブドモデル名を抽出
+                served = ""
+                if "--served-model-name" in cmd:
+                    idx = cmd.split().index("--served-model-name")
+                    served = cmd.split()[idx + 1] if idx + 1 < len(cmd.split()) else ""
+
+                label = served or cmd.split()[1] if len(cmd.split()) > 1 else cmd[:50]
+                label_short = label if len(label) <= 40 else label[:37] + "..."
+
+                pid_str = t(GRAY, f"PID {pid}")
+                port_label = t(BOLD, f":{port_str}") if port_str else t(GRAY, "?port")
+                mem_label = t(YELLOW, mem_gb)
+
+                print(f"    {port_label}  {t(CYAN, label_short)}")
+                print(f"      {pid_str}  {mem_label}")
+                print()
+    except Exception as e:
+        print(t(RED, f"  Failed to read processes: {e}"))
+
+    return 0
+
+
 def cmd_explain(args):
     """
     gh copilot explain と同じ: コマンドを説明する。
@@ -648,6 +747,10 @@ def main():
     parser.add_argument("--version", "-v", action="version", version="kc 1.0.0")
 
     sub = parser.add_subparsers(dest="cmd")
+
+    # status
+    p_stat = sub.add_parser("status", aliases=["st"], help="Show running AI servers")
+    p_stat.set_defaults(func=cmd_status)
 
     # suggest
     p_sug = sub.add_parser("suggest", aliases=["s"], help="Suggest a command")
