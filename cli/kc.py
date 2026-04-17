@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 """
 kc — Knowledge CLI
-Claude Code寄りアルゴリズムで動く統合AIコーディングCLI
+gh copilot CLI の器をそのまま使い、バックエンドをローカルAIに差し替えられる。
 
-Backends:
-  claude   → claude CLI (Claude Code)
-  copilot  → gh copilot suggest/explain
-  local    → vLLM MLX endpoint (Qwen3 KI蒸留 等)
+Usage (gh copilot と同じ):
+  kc suggest [-t shell|git|gh] <prompt>
+  kc explain <command>
+  kc               # interactive REPL
 
-Usage:
-  kc [prompt]
-  kc code [prompt]
-  kc fix path/to/file.py
-  kc explain path/to/file.py
-  kc models
-  kc models add <name> <url>
-  kc --backend copilot [prompt]
+Backend routing:
+  ~/.kc/models.json にモデルを登録して切り替える
+  kc --model qwen3 suggest 'list files recursively'
 """
 
 import argparse
@@ -29,220 +24,203 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-# ── Config paths ──────────────────────────────────────────────────────────────
-CONFIG_DIR = Path.home() / ".kc"
-MODELS_FILE = CONFIG_DIR / "models.json"
-CONFIG_FILE = CONFIG_DIR / "config.json"
+# ─── Paths ────────────────────────────────────────────────────────────────────
+KC_DIR = Path.home() / ".kc"
+MODELS_FILE = KC_DIR / "models.json"
+CONFIG_FILE = KC_DIR / "config.json"
+HISTORY_FILE = KC_DIR / "history.json"
 
-# ── Terminal colors ────────────────────────────────────────────────────────────
-RESET = "\033[0m"
+# ─── ANSI ─────────────────────────────────────────────────────────────────────
+R = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-CYAN = "\033[36m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-RED = "\033[31m"
-MAGENTA = "\033[35m"
-BLUE = "\033[34m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+MAGENTA = "\033[95m"
+BLUE = "\033[94m"
+GRAY = "\033[90m"
+BG_DARK = "\033[48;5;236m"
 
 
-def c(color: str, text: str) -> str:
-    """Apply ANSI color if stdout is a tty."""
-    if not sys.stdout.isatty():
-        return text
-    return f"{color}{text}{RESET}"
+def t(color: str, text: str) -> str:
+    return f"{color}{text}{R}" if sys.stdout.isatty() else text
 
 
-def banner():
-    print(c(CYAN, BOLD + "⚡ kc" + RESET) + c(DIM, " — Knowledge CLI"))
-
-
-def print_model_tag(name: str):
-    print(c(DIM, f"  [{name}]"))
-
-
-# ── Config / Model Registry ────────────────────────────────────────────────────
-def ensure_config():
-    CONFIG_DIR.mkdir(exist_ok=True)
+# ─── Config ───────────────────────────────────────────────────────────────────
+def _init():
+    KC_DIR.mkdir(exist_ok=True)
     if not MODELS_FILE.exists():
-        default_models = {
-            "claude": {
-                "type": "claude",
-                "description": "Claude Code (default)",
-                "default": True,
-            },
+        MODELS_FILE.write_text(json.dumps({
             "copilot": {
                 "type": "copilot",
-                "description": "GitHub Copilot CLI",
+                "display": "GitHub Copilot",
             },
-        }
-        MODELS_FILE.write_text(json.dumps(default_models, indent=2, ensure_ascii=False))
+            "claude": {
+                "type": "claude",
+                "display": "Claude (Anthropic)",
+            },
+        }, indent=2, ensure_ascii=False))
     if not CONFIG_FILE.exists():
-        CONFIG_FILE.write_text(json.dumps({"default_backend": "claude"}, indent=2))
+        CONFIG_FILE.write_text(json.dumps({
+            "default_model": "copilot",
+        }, indent=2))
+    if not HISTORY_FILE.exists():
+        HISTORY_FILE.write_text("[]")
 
 
-def load_models() -> dict:
-    ensure_config()
+def _models() -> dict:
+    _init()
     return json.loads(MODELS_FILE.read_text())
 
 
-def load_config() -> dict:
-    ensure_config()
+def _cfg() -> dict:
+    _init()
     return json.loads(CONFIG_FILE.read_text())
 
 
-def save_models(models: dict):
-    ensure_config()
-    MODELS_FILE.write_text(json.dumps(models, indent=2, ensure_ascii=False))
+def _default_model() -> str:
+    return _cfg().get("default_model", "copilot")
 
 
-def get_default_backend() -> str:
-    return load_config().get("default_backend", "claude")
+def _save_models(m: dict):
+    _init()
+    MODELS_FILE.write_text(json.dumps(m, indent=2, ensure_ascii=False))
 
 
-# ── Context collector (Claude Code 寄り: git / file aware) ────────────────────
-def collect_context(target_file: Optional[str] = None) -> str:
-    """
-    Claude Code アルゴリズム: ファイルと git diff を自動収集してコンテキストとして注入。
-    """
-    context_parts = []
+def _save_cfg(c: dict):
+    _init()
+    CONFIG_FILE.write_text(json.dumps(c, indent=2))
 
-    # git diff HEAD (変更中のファイル)
+
+def _append_history(entry: dict):
     try:
-        diff = subprocess.check_output(
-            ["git", "diff", "HEAD", "--stat"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        if diff:
-            context_parts.append(f"[git diff --stat]\n{diff[:1000]}")
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        h = json.loads(HISTORY_FILE.read_text())
+        h.append(entry)
+        HISTORY_FILE.write_text(json.dumps(h[-200:], indent=2, ensure_ascii=False))
+    except Exception:
         pass
 
-    # 指定ファイルの内容
-    if target_file and Path(target_file).is_file():
-        content = Path(target_file).read_text(errors="replace")
-        lang = Path(target_file).suffix.lstrip(".")
-        # 長すぎる場合は先頭200行だけ
-        lines = content.splitlines()
-        if len(lines) > 200:
-            content = "\n".join(lines[:200]) + f"\n... ({len(lines)-200} more lines)"
-        context_parts.append(f"[file: {target_file}]\n```{lang}\n{content}\n```")
 
-    return "\n\n".join(context_parts)
+# ─── Terminal UI helpers (gh copilot スタイル) ────────────────────────────────
+
+def _header(model_display: str):
+    """gh copilot そっくりのヘッダー"""
+    print()
+    print(t(CYAN, BOLD + "Welcome to GitHub Copilot in the CLI!" + R))
+    print(t(GRAY, f"  powered by: {model_display}"))
+    print()
 
 
-# ── Backends ─────────────────────────────────────────────────────────────────
+def _show_suggestion(suggestion: str, target: str = "shell"):
+    """gh copilot suggest のコマンド表示ボックス"""
+    lines = suggestion.strip().splitlines()
+    width = max(len(l) for l in lines) + 4
+    sep = "─" * width
+    print()
+    print(t(GRAY, f"  {sep}"))
+    for line in lines:
+        print(t(GRAY, "  │ ") + t(CYAN, BOLD + line + R))
+    print(t(GRAY, f"  {sep}"))
+    print()
 
-def backend_claude(prompt: str, mode: str = "ask") -> int:
+
+def _show_explanation(explanation: str):
+    """gh copilot explain のテキスト表示"""
+    print()
+    for line in explanation.strip().splitlines():
+        print(f"  {line}")
+    print()
+
+
+def _menu(options: list, prompt: str = "? What would you like to do?") -> Optional[str]:
     """
-    Claude Code バックエンド。
-    `claude` CLI がなければ Anthropic API 直接呼び出しにフォールバック。
+    gh copilot の対話メニューを再現。
+    矢印キー不要: 番号入力で選択。
     """
-    # claude CLI があれば使う
+    print(t(BOLD, f"  {prompt}"))
+    for i, (label, _) in enumerate(options, 1):
+        print(f"  {t(GRAY, str(i) + '.')} {label}")
+    print()
     try:
-        subprocess.run(["which", "claude"], check=True, capture_output=True)
-        cmd = ["claude", "--print", prompt] if mode != "code" else ["claude", "--print", prompt]
-        return subprocess.run(cmd).returncode
-    except subprocess.CalledProcessError:
+        raw = input(t(BOLD, "  > ")).strip()
+        if raw.isdigit():
+            idx = int(raw) - 1
+            if 0 <= idx < len(options):
+                return options[idx][1]
+        # label prefix match
+        for label, val in options:
+            if label.lower().startswith(raw.lower()):
+                return val
+    except (KeyboardInterrupt, EOFError):
+        pass
+    return None
+
+
+def _copy_to_clipboard(text: str):
+    """macOS pbcopy でコピー。"""
+    try:
+        subprocess.run(["pbcopy"], input=text.encode(), check=True)
+        print(t(GREEN, "  ✓ Copied to clipboard!"))
+    except Exception:
+        print(t(RED, "  ✗ pbcopy not available"))
+
+
+def _rate(suggestion: str, target: str):
+    """簡易フィードバック収録 (履歴に保存)。"""
+    print(t(BOLD, "  ? Rate this response:"))
+    print(f"  {t(GRAY, '1.')} 👍  Good")
+    print(f"  {t(GRAY, '2.')} 👎  Bad")
+    try:
+        r = input(t(BOLD, "  > ")).strip()
+        rating = "good" if r == "1" else "bad" if r == "2" else "skip"
+        _append_history({"type": "rating", "rating": rating, "text": suggestion[:200]})
+        print(t(GRAY, f"  Thanks for the feedback! ({rating})"))
+    except (KeyboardInterrupt, EOFError):
         pass
 
-    # フォールバック: ANTHROPIC_API_KEY で直接 API 呼び出し
-    api_key = os.getenv("ANTHROPIC_API_KEY") or _keychain_get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print(c(RED, "❌ claude CLI not found and ANTHROPIC_API_KEY not set."))
-        print(c(DIM, "   Install: brew install anthropic/tap/claude"))
-        print(c(DIM, "   Or: export ANTHROPIC_API_KEY=sk-ant-..."))
-        return 1
 
-    system = (
-        "You are an expert coding assistant. "
-        "Be concise. Show code blocks when relevant."
-    )
-    if mode == "code":
-        system += " Focus on producing working code."
+# ─── Backends ─────────────────────────────────────────────────────────────────
 
-    return _anthropic_api_call(api_key, system, prompt)
-
-
-def backend_copilot(prompt: str, mode: str = "ask") -> int:
-    """
-    GitHub Copilot CLI バックエンド。
-    gh copilot suggest (code) / gh copilot explain (explain)
-    """
+def _call_copilot_suggest(query: str, target: str) -> Optional[str]:
+    """gh copilot suggest をそのまま呼ぶ (gh が入っている場合)。"""
     try:
-        subprocess.run(["which", "gh"], check=True, capture_output=True)
-    except subprocess.CalledProcessError:
-        print(c(RED, "❌ gh CLI not found. Install: brew install gh"))
-        return 1
-
-    if mode in ("code", "fix"):
-        cmd = ["gh", "copilot", "suggest", "-t", "shell", prompt]
-    elif mode == "explain":
-        cmd = ["gh", "copilot", "explain", prompt]
-    else:
-        cmd = ["gh", "copilot", "suggest", prompt]
-
-    return subprocess.run(cmd).returncode
-
-
-def backend_local(prompt: str, model_cfg: dict, mode: str = "ask") -> int:
-    """
-    ローカルAI バックエンド (vLLM MLX / mlx_lm.server 互換)
-    OpenAI互換エンドポイントを叩く。
-    """
-    url = model_cfg.get("url", "http://localhost:8102/v1/chat/completions")
-    model_name = model_cfg.get("model_name", "local")
-
-    system = "あなたは優秀なAIコーディングアシスタントです。日本語で回答してください。"
-    if mode == "code":
-        system += "コードブロックを使い、動くコードを出力してください。"
-
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": 2048,
-        "stream": False,
-    }
-
-    print(c(CYAN, f"  Querying {model_cfg.get('description', model_name)}..."), flush=True)
-
-    try:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        result = subprocess.run(
+            ["gh", "copilot", "suggest", "-t", target, "--", query],
+            capture_output=True, text=True, timeout=30,
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read())
-            content = result["choices"][0]["message"]["content"]
-            print()
-            print(content)
-            return 0
-    except urllib.error.URLError as e:
-        print(c(RED, f"❌ Local model unreachable: {e}"))
-        print(c(DIM, f"   Is the server running? vllm serve --port 8102"))
-        return 1
-    except Exception as e:
-        print(c(RED, f"❌ Error: {e}"))
-        return 1
+        out = result.stdout.strip()
+        # gh copilot は最後のコマンドを返す
+        return out if out else None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
 
 
-def _anthropic_api_call(api_key: str, system: str, prompt: str) -> int:
-    """Anthropic Messages API 直接呼び出し (claude CLI フォールバック)."""
+def _call_copilot_explain(query: str) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["gh", "copilot", "explain", "--", query],
+            capture_output=True, text=True, timeout=30,
+        )
+        return result.stdout.strip() or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def _call_claude(prompt: str, system: str = "") -> Optional[str]:
+    """Claude API 直接呼び出し。"""
+    api_key = os.getenv("ANTHROPIC_API_KEY") or _keychain("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
     payload = {
         "model": "claude-sonnet-4-5",
-        "max_tokens": 4096,
-        "system": system,
+        "max_tokens": 2048,
+        "system": system or "You are a helpful coding assistant. Be concise.",
         "messages": [{"role": "user", "content": prompt}],
     }
     try:
-        data = json.dumps(payload).encode("utf-8")
+        data = json.dumps(payload).encode()
         req = urllib.request.Request(
             "https://api.anthropic.com/v1/messages",
             data=data,
@@ -254,299 +232,390 @@ def _anthropic_api_call(api_key: str, system: str, prompt: str) -> int:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read())
-            text = result["content"][0]["text"]
-            print()
-            _render_output(text)
-            return 0
-    except Exception as e:
-        print(c(RED, f"❌ API error: {e}"))
-        return 1
+            return json.loads(resp.read())["content"][0]["text"]
+    except Exception:
+        return None
 
 
-def _keychain_get(key: str) -> Optional[str]:
-    """macOS Keychain からシークレットを取得。"""
+def _call_local(prompt: str, model_cfg: dict, system: str = "") -> Optional[str]:
+    """OpenAI互換ローカルエンドポイント (vLLM MLX 等)。"""
+    url = model_cfg.get("url", "http://localhost:8102/v1/chat/completions")
+    model_name = model_cfg.get("model_name", "local")
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system or "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 2048,
+    }
     try:
-        out = subprocess.check_output(
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            url, data=data, headers={"Content-Type": "application/json"}, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"[ERROR: {e}]"
+
+
+def _keychain(key: str) -> Optional[str]:
+    try:
+        return subprocess.check_output(
             ["security", "find-generic-password", "-s", key, "-w"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        return out or None
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip() or None
     except subprocess.CalledProcessError:
         return None
 
 
-def _render_output(text: str):
-    """コードブロックをハイライト表示 (簡易)。"""
-    in_code = False
-    for line in text.splitlines():
-        if line.startswith("```"):
-            in_code = not in_code
-            print(c(DIM, line))
-        elif in_code:
-            print(c(CYAN, line))
-        else:
-            print(line)
+# ─── Core query dispatcher ────────────────────────────────────────────────────
 
+def _query(prompt: str, model_key: str, system: str = "") -> Optional[str]:
+    """モデルキーを元にバックエンドを選択して問い合わせ。"""
+    models = _models()
+    cfg = models.get(model_key)
+    if not cfg:
+        print(t(RED, f"  Unknown model: {model_key}. Run: kc models"))
+        return None
 
-# ── Router (Claude Code 寄り) ─────────────────────────────────────────────────
-def route(backend_name: str, prompt: str, mode: str = "ask") -> int:
-    """
-    バックエンドを選択してルーティング。
-    デフォルトは claude (Claude Code 寄り)。
-    """
-    models = load_models()
+    mtype = cfg.get("type", "local")
+    print(t(GRAY, f"  Asking {cfg.get('display', model_key)}..."), end="\r", flush=True)
 
-    print_model_tag(backend_name)
-
-    if backend_name == "claude":
-        return backend_claude(prompt, mode)
-    elif backend_name == "copilot":
-        return backend_copilot(prompt, mode)
-    elif backend_name in models:
-        cfg = models[backend_name]
-        if cfg.get("type") == "local":
-            return backend_local(prompt, cfg, mode)
-        else:
-            print(c(RED, f"❌ Unknown model type: {cfg.get('type')}"))
-            return 1
+    if mtype == "copilot":
+        # gh copilot 経由で試みる (動かなければ claude フォールバック)
+        result = _call_copilot_suggest(prompt, "shell")
+        if result is None:
+            # フォールバック: claude
+            result = _call_claude(prompt, system)
+    elif mtype == "claude":
+        result = _call_claude(prompt, system)
+    elif mtype == "local":
+        result = _call_local(prompt, cfg, system)
     else:
-        print(c(RED, f"❌ Unknown backend: {backend_name}"))
-        print(c(DIM, "  Run: kc models"))
+        result = None
+
+    # 表示のクリア
+    print(" " * 60, end="\r")
+    return result
+
+
+# ─── Sub-commands ─────────────────────────────────────────────────────────────
+
+def cmd_suggest(args):
+    """
+    gh copilot suggest と同じフロー:
+    1. 問い合わせ → コマンド表示
+    2. メニュー: Copy / Explain / Revise / Rate / Exit
+    """
+    _init()
+    query = " ".join(args.query)
+    target = getattr(args, "target", "shell")
+    model_key = getattr(args, "model", None) or _default_model()
+    models = _models()
+    display = models.get(model_key, {}).get("display", model_key)
+
+    _header(display)
+
+    # suggest 用システムプロンプト
+    system = (
+        f"You are a CLI assistant. The user is on macOS zsh. "
+        f"Target: {target} command. "
+        "Respond with ONLY the command, no explanations, no markdown fences. "
+        "Single line unless pipe is required."
+    )
+    prompt = f"Suggest a {target} command to: {query}"
+
+    suggestion = _query(prompt, model_key, system)
+    if not suggestion:
+        print(t(RED, "  Failed to get suggestion."))
         return 1
 
+    # コマンドだけ抽出 (```...``` を除去)
+    suggestion = suggestion.strip().strip("`").strip()
+    if suggestion.startswith("sh\n") or suggestion.startswith("bash\n"):
+        suggestion = "\n".join(suggestion.splitlines()[1:])
 
-# ── Sub-commands ──────────────────────────────────────────────────────────────
+    _show_suggestion(suggestion, target)
+    _append_history({"type": "suggest", "query": query, "result": suggestion, "model": model_key})
 
-def cmd_ask(args):
-    """汎用質問 (Claude Code 寄り: コンテキスト自動注入)。"""
-    prompt = " ".join(args.prompt)
-    context = collect_context()
-    if context:
-        full_prompt = f"{context}\n\n---\n{prompt}"
-    else:
-        full_prompt = prompt
-    return route(args.backend, full_prompt, mode="ask")
+    # ── インタラクティブメニュー (gh copilot そのまま) ──
+    while True:
+        action = _menu([
+            ("Copy command to clipboard", "copy"),
+            ("Explain command",           "explain"),
+            ("Revise command",            "revise"),
+            ("Rate response",             "rate"),
+            ("Exit",                      "exit"),
+        ])
 
+        if action == "copy":
+            _copy_to_clipboard(suggestion)
+            break
 
-def cmd_code(args):
-    """コーディング特化モード (Claude Code 寄り)。"""
-    prompt = " ".join(args.prompt)
-    context = collect_context()
-    full_prompt = f"Write working code for the following task:\n\n{prompt}"
-    if context:
-        full_prompt = f"{context}\n\n---\n{full_prompt}"
-    return route(args.backend, full_prompt, mode="code")
+        elif action == "explain":
+            exp_system = (
+                "Explain the following shell command clearly. "
+                "Show what each part does. Keep it under 10 lines."
+            )
+            exp = _query(
+                f"Explain this command:\n{suggestion}",
+                model_key, exp_system,
+            )
+            if exp:
+                _show_explanation(exp)
 
+        elif action == "revise":
+            try:
+                revision = input(t(BOLD, "  Revision request: ")).strip()
+            except (KeyboardInterrupt, EOFError):
+                break
+            rev_prompt = (
+                f"Original request: {query}\n"
+                f"Current command: {suggestion}\n"
+                f"Revision: {revision}\n"
+                "Give me the revised command only, no markdown."
+            )
+            new_suggestion = _query(rev_prompt, model_key, system)
+            if new_suggestion:
+                suggestion = new_suggestion.strip().strip("`").strip()
+                _show_suggestion(suggestion, target)
 
-def cmd_fix(args):
-    """ファイルのバグ修正 (Claude Code 寄り: ファイル全体読み込み)。"""
-    file_path = args.file
-    context = collect_context(target_file=file_path)
-    if not context:
-        print(c(RED, f"❌ File not found: {file_path}"))
-        return 1
-    prompt = f"{context}\n\n---\nIdentify and fix all bugs in this file. Show only the corrected code."
-    return route(args.backend, prompt, mode="code")
+        elif action == "rate":
+            _rate(suggestion, target)
+            break
 
-
-def cmd_explain(args):
-    """コード説明モード。"""
-    # ファイルか文字列か判定
-    text = " ".join(args.target) if hasattr(args, "target") else ""
-    if text and Path(text).is_file():
-        context = collect_context(target_file=text)
-        prompt = f"{context}\n\n---\nExplain this code in detail. Focus on what it does and why."
-    else:
-        prompt = f"Explain the following:\n\n{text}"
-    return route(args.backend, prompt, mode="ask")
-
-
-def cmd_models(args):
-    """モデル一覧 / 追加 / 削除。"""
-    models = load_models()
-
-    if hasattr(args, "models_cmd") and args.models_cmd == "add":
-        # kc models add <name> <url> [--model-name <model>] [--description <desc>]
-        new_model = {
-            "type": "local",
-            "url": args.url,
-            "model_name": getattr(args, "model_name", args.name),
-            "description": getattr(args, "description", args.name),
-        }
-        models[args.name] = new_model
-        save_models(models)
-        print(c(GREEN, f"✅ Registered: {args.name} → {args.url}"))
-        return 0
-
-    if hasattr(args, "models_cmd") and args.models_cmd == "remove":
-        if args.name in models:
-            del models[args.name]
-            save_models(models)
-            print(c(GREEN, f"✅ Removed: {args.name}"))
         else:
-            print(c(RED, f"❌ Not found: {args.name}"))
-        return 0
+            print(t(GRAY, "  Bye!"))
+            break
 
-    if hasattr(args, "models_cmd") and args.models_cmd == "default":
-        cfg = load_config()
-        cfg["default_backend"] = args.name
-        CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
-        print(c(GREEN, f"✅ Default backend set to: {args.name}"))
-        return 0
-
-    # デフォルト: 一覧表示
-    default_be = get_default_backend()
-    print(c(BOLD, "\n📦 Registered Models:\n"))
-    for name, cfg in models.items():
-        tag = c(GREEN, " ★ default") if name == default_be else ""
-        desc = cfg.get("description", name)
-        mtype = cfg.get("type", "?")
-        url = cfg.get("url", "")
-        url_str = c(DIM, f"  {url}") if url else ""
-        print(f"  {c(CYAN, name)}{tag}")
-        print(f"    {desc} [{mtype}]{url_str}")
-    print()
     return 0
 
 
-# ── REPL (multi-turn, Claude Code 寄り) ──────────────────────────────────────
+def cmd_explain(args):
+    """
+    gh copilot explain と同じ: コマンドを説明する。
+    """
+    _init()
+    command = " ".join(args.command)
+    model_key = getattr(args, "model", None) or _default_model()
+    models = _models()
+    display = models.get(model_key, {}).get("display", model_key)
+
+    _header(display)
+    print(t(BOLD, f"  Explaining: ") + t(CYAN, command))
+
+    system = (
+        "Explain the shell command clearly. Cover: what it does, each flag/argument, "
+        "and any gotchas. Keep it under 15 lines."
+    )
+    exp = _query(f"Explain: {command}", model_key, system)
+    if exp:
+        _show_explanation(exp)
+        _append_history({"type": "explain", "command": command, "result": exp, "model": model_key})
+    else:
+        print(t(RED, "  Failed to get explanation."))
+        return 1
+    return 0
+
+
+def cmd_models(args):
+    """モデル一覧 / 追加 / 削除 / デフォルト設定。"""
+    _init()
+    models = _models()
+    default = _default_model()
+    sub = getattr(args, "models_sub", None)
+
+    if sub == "add":
+        models[args.name] = {
+            "type": "local",
+            "display": getattr(args, "display", args.name),
+            "url": args.url,
+            "model_name": getattr(args, "model_name", args.name),
+        }
+        _save_models(models)
+        print(t(GREEN, f"  ✓ Added: {args.name} → {args.url}"))
+
+    elif sub == "remove":
+        if args.name in models:
+            del models[args.name]
+            _save_models(models)
+            print(t(GREEN, f"  ✓ Removed: {args.name}"))
+        else:
+            print(t(RED, f"  ✗ Not found: {args.name}"))
+
+    elif sub == "default":
+        c = _cfg()
+        c["default_model"] = args.name
+        _save_cfg(c)
+        print(t(GREEN, f"  ✓ Default set to: {args.name}"))
+
+    else:
+        # 一覧表示
+        print()
+        print(t(BOLD, "  Registered models:"))
+        print()
+        for name, cfg in models.items():
+            star = t(GREEN, " ★") if name == default else ""
+            display = cfg.get("display", name)
+            mtype = cfg.get("type", "?")
+            url = cfg.get("url", "")
+            print(f"  {t(CYAN, name)}{star}  {t(GRAY, display)}  [{mtype}]")
+            if url:
+                print(f"      {t(GRAY, url)}")
+        print()
+
+    return 0
+
+
 def cmd_repl(args):
     """
-    インタラクティブ REPL モード。
-    Claude Code 寄り: 会話コンテキストを保持しながら連続質問できる。
+    gh copilot interactive REPL 風: チャット形式で連続質問。
     """
-    backend = args.backend
-    models = load_models()
+    _init()
+    model_key = getattr(args, "model", None) or _default_model()
+    models = _models()
+    display = models.get(model_key, {}).get("display", model_key)
 
-    print(c(CYAN, f"\n⚡ kc REPL [{backend}]") + c(DIM, "  (Ctrl+C / 'exit' to quit)\n"))
+    _header(display)
+    print(t(GRAY, "  Type your question. Ctrl+C or 'exit' to quit."))
+    print(t(GRAY, "  Slash commands: /model /clear /help"))
+    print()
 
-    history = []  # multi-turn コンテキスト
+    history = []
 
     while True:
         try:
-            user_input = input(c(BOLD, "you> ")).strip()
+            user = input(t(BOLD, "> ")).strip()
         except (KeyboardInterrupt, EOFError):
-            print(c(DIM, "\nbye."))
+            print(t(GRAY, "\n  Session ended."))
             break
 
-        if not user_input or user_input.lower() in ("exit", "quit", "bye"):
-            print(c(DIM, "bye."))
+        if not user:
+            continue
+
+        # Slash commands
+        if user == "/help":
+            print(t(GRAY, "  /model <name>  — switch model"))
+            print(t(GRAY, "  /clear         — clear history"))
+            print(t(GRAY, "  /models        — list models"))
+            print(t(GRAY, "  exit / quit    — exit"))
+            continue
+        if user.startswith("/model "):
+            model_key = user.split(" ", 1)[1].strip()
+            display = _models().get(model_key, {}).get("display", model_key)
+            print(t(GREEN, f"  ✓ Switched to: {model_key} ({display})"))
+            continue
+        if user == "/clear":
+            history = []
+            print(t(GRAY, "  History cleared."))
+            continue
+        if user == "/models":
+            for name, cfg in _models().items():
+                star = " ★" if name == _default_model() else ""
+                print(f"  {t(CYAN, name)}{star}  {cfg.get('display', name)}")
+            continue
+        if user.lower() in ("exit", "quit", "bye"):
+            print(t(GRAY, "  Bye!"))
             break
 
-        # コンテキスト付きプロンプト組み立て
-        history.append(f"User: {user_input}")
-        context = collect_context()
-        full_prompt = ""
-        if context:
-            full_prompt += f"{context}\n\n---\n"
-        if len(history) > 1:
-            full_prompt += "Previous conversation:\n"
-            full_prompt += "\n".join(history[:-1][-6:])  # 直近3ターン
-            full_prompt += "\n\n---\n"
-        full_prompt += user_input
+        # コンテキスト付きプロンプト
+        history.append(f"User: {user}")
+        ctx = "\n".join(history[-6:])
+        result = _query(ctx, model_key)
+        if result:
+            print()
+            _show_explanation(result)
+            history.append(f"Assistant: {result[:200]}")
 
-        print()
-        route(backend, full_prompt, mode="ask")
-        print()
+    return 0
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ─── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    ensure_config()
-    default_be = get_default_backend()
+    _init()
 
     parser = argparse.ArgumentParser(
         prog="kc",
-        description="kc — Knowledge CLI: Claude Code × Copilot × Local AI",
+        description="kc — Knowledge CLI (gh copilot compatible, local AI ready)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=textwrap.dedent(f"""\
-            Examples:
-              kc 'PCC とは何か？'
-              kc code 'FastAPI で /health エンドポイントを作れ'
-              kc fix src/main.py
-              kc explain src/vector_proxy.py
-              kc repl
-              kc --backend copilot 'how to reverse a list in python'
-              kc --backend qwen3 'LoRA とは何か？'
-              kc models
-              kc models add qwen3 http://localhost:8102/v1/chat/completions
+        epilog=textwrap.dedent("""\
+            Commands (gh copilot compatible):
+              kc suggest [-t shell|git|gh] <prompt>
+              kc explain <command>
 
-            Default backend: {default_be}
-            Config: ~/.kc/
+            Extra:
+              kc repl                     interactive chat
+              kc models                   list models
+              kc models add <n> <url>     register local AI
+              kc models default <n>       set default
+
+            Examples:
+              kc suggest 'find all py files modified today'
+              kc suggest -t git 'undo last commit but keep changes'
+              kc explain 'find . -name "*.py" | xargs grep -l TODO'
+              kc --model qwen3 suggest 'KI蒸留とは'
+              kc models add qwen3 http://localhost:8102/v1/chat/completions
         """),
     )
     parser.add_argument(
-        "--backend", "-b",
-        default=default_be,
-        help=f"Backend to use (default: {default_be})",
+        "--model", "-m",
+        default=None,
+        help="Model to use (overrides default)",
     )
-    parser.add_argument(
-        "--version", "-v",
-        action="version",
-        version="kc 1.0.0 — Knowledge CLI",
-    )
+    parser.add_argument("--version", "-v", action="version", version="kc 1.0.0")
 
-    subparsers = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="cmd")
 
-    # ask (default)
-    sp_ask = subparsers.add_parser("ask", help="Ask a question")
-    sp_ask.add_argument("prompt", nargs="+")
-    sp_ask.set_defaults(func=cmd_ask)
-
-    # code
-    sp_code = subparsers.add_parser("code", help="Code generation mode")
-    sp_code.add_argument("prompt", nargs="+")
-    sp_code.set_defaults(func=cmd_code)
-
-    # fix
-    sp_fix = subparsers.add_parser("fix", help="Fix bugs in a file")
-    sp_fix.add_argument("file")
-    sp_fix.set_defaults(func=cmd_fix)
+    # suggest
+    p_sug = sub.add_parser("suggest", aliases=["s"], help="Suggest a command")
+    p_sug.add_argument("-t", dest="target", default="shell",
+                       choices=["shell", "git", "gh"], help="Target (default: shell)")
+    p_sug.add_argument("query", nargs="+", help="What you want to do")
+    p_sug.set_defaults(func=cmd_suggest)
 
     # explain
-    sp_explain = subparsers.add_parser("explain", help="Explain code or text")
-    sp_explain.add_argument("target", nargs="+")
-    sp_explain.set_defaults(func=cmd_explain)
+    p_exp = sub.add_parser("explain", aliases=["e"], help="Explain a command")
+    p_exp.add_argument("command", nargs="+", help="Command to explain")
+    p_exp.set_defaults(func=cmd_explain)
 
     # repl
-    sp_repl = subparsers.add_parser("repl", help="Interactive REPL (multi-turn)")
-    sp_repl.set_defaults(func=cmd_repl)
+    p_repl = sub.add_parser("repl", aliases=["r"], help="Interactive chat")
+    p_repl.set_defaults(func=cmd_repl)
 
     # models
-    sp_models = subparsers.add_parser("models", help="Manage AI model registry")
-    models_sub = sp_models.add_subparsers(dest="models_cmd")
+    p_mod = sub.add_parser("models", help="Manage model registry")
+    msub = p_mod.add_subparsers(dest="models_sub")
+    p_mod.set_defaults(func=cmd_models)
 
-    sp_models_add = models_sub.add_parser("add", help="Register a new model")
-    sp_models_add.add_argument("name", help="Model alias (e.g. qwen3)")
-    sp_models_add.add_argument("url", help="OpenAI-compatible endpoint URL")
-    sp_models_add.add_argument("--model-name", default=None, dest="model_name")
-    sp_models_add.add_argument("--description", default=None, dest="description")
+    p_add = msub.add_parser("add", help="Add a local model")
+    p_add.add_argument("name", help="Alias")
+    p_add.add_argument("url", help="OpenAI-compatible endpoint")
+    p_add.add_argument("--model-name", dest="model_name", default=None)
+    p_add.add_argument("--display", default=None, help="Display name")
+    p_add.set_defaults(func=cmd_models)
 
-    sp_models_rm = models_sub.add_parser("remove", help="Remove a model")
-    sp_models_rm.add_argument("name")
+    p_rm = msub.add_parser("remove", help="Remove a model")
+    p_rm.add_argument("name")
+    p_rm.set_defaults(func=cmd_models)
 
-    sp_models_default = models_sub.add_parser("default", help="Set default backend")
-    sp_models_default.add_argument("name")
+    p_def = msub.add_parser("default", help="Set default model")
+    p_def.add_argument("name")
+    p_def.set_defaults(func=cmd_models)
 
-    sp_models.set_defaults(func=cmd_models)
+    # parse
+    args, extra = parser.parse_known_args()
 
-    # ── Parse ──────────────────────────────────────────────────────────────────
-    # kc [prompt without subcommand] → ask
-    args, remaining = parser.parse_known_args()
-
-    banner()
-
-    if args.command is None:
-        if remaining:
-            args.prompt = remaining
-            args.func = cmd_ask
-            args.command = "ask"
+    # no subcommand → REPL
+    if args.cmd is None:
+        if extra:
+            # kc 'some question' → suggest
+            args.query = extra
+            args.target = "shell"
+            args.func = cmd_suggest
         else:
-            # no args → repl
             args.func = cmd_repl
-            args.command = "repl"
 
     if hasattr(args, "func"):
         sys.exit(args.func(args))
