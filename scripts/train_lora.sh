@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
-# KIFT Model — Knowledge-Injected Fine-Tuned Local AI
+# KIFT — Knowledge-Injected Fine-Tuned Model
+# (Qwen3 Coder Next Abliterated × Ryota-Core Corpus)
 # Run on Mac Studio (M3 Ultra 512GB)
 #
 # Usage:
@@ -30,6 +31,11 @@ LEARNING_RATE=1e-5
 ITERS=1000
 VAL_BATCHES=25
 SAVE_EVERY=200
+
+# Safety timeout (seconds) — kills training if stuck
+# 80B MoE on M3 Ultra: ~4-8 hours typical, 10h max
+TIMEOUT_HOURS=10
+TIMEOUT_SECONDS=$((TIMEOUT_HOURS * 3600))
 
 echo "╔══════════════════════════════════════════╗"
 echo "║  🧬 KIFT Model — Training                ║"
@@ -108,13 +114,16 @@ PYEOF
 
 # ── Step 2: Train ──
 echo ""
-echo "▶ Step 2: Starting LoRA training..."
-echo "  (This will take ~2-3 hours on M3 Ultra)"
+echo "▶ Step 2: Starting KIFT LoRA training..."
+echo "  80B MoE → ~4-8 hours on M3 Ultra (timeout: ${TIMEOUT_HOURS}h)"
+echo "  Checkpoints saved every ${SAVE_EVERY} iters (safe to kill)"
 echo ""
+START_TIME=$(date +%s)
 
 mkdir -p "$ADAPTER_DIR"
 
-python3 -m mlx_lm.lora \
+# Run with timeout — training saves checkpoints, so killing is safe
+timeout ${TIMEOUT_SECONDS} python3 -m mlx_lm.lora \
     --model "$MODEL_NAME" \
     --train \
     --data "$CORPUS_DIR/data" \
@@ -126,6 +135,24 @@ python3 -m mlx_lm.lora \
     --iters $ITERS \
     --val-batches $VAL_BATCHES \
     --save-every $SAVE_EVERY
+
+TRAIN_EXIT=$?
+END_TIME=$(date +%s)
+ELAPSED=$(( (END_TIME - START_TIME) / 60 ))
+
+if [ $TRAIN_EXIT -eq 124 ]; then
+    echo ""
+    echo "⚠️  Training timed out after ${TIMEOUT_HOURS}h (${ELAPSED}min)"
+    echo "   Last checkpoint saved in: $ADAPTER_DIR"
+    echo "   Resume or use the partial adapter — it's still usable."
+elif [ $TRAIN_EXIT -ne 0 ]; then
+    echo ""
+    echo "❌ Training failed (exit: $TRAIN_EXIT) after ${ELAPSED}min"
+    echo "   Check logs. Last checkpoint may still be in: $ADAPTER_DIR"
+else
+    echo ""
+    echo "✅ Training completed in ${ELAPSED} minutes"
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
