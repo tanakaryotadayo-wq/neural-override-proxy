@@ -29,6 +29,28 @@ KC_DIR = Path.home() / ".kc"
 MODELS_FILE = KC_DIR / "models.json"
 CONFIG_FILE = KC_DIR / "config.json"
 HISTORY_FILE = KC_DIR / "history.json"
+RULES_FILE = KC_DIR / "rules.md"  # ← AIへの永続ルール
+
+DEFAULT_RULES = """\
+# kc AI Rules
+# ここに書いたルールは全バックエンド・全コマンドに自動注入される。
+# Markdown形式で書いてOK。
+
+## 基本ルール
+- 回答は簡潔に。冗長な前置きは省く。
+- コードブロックは必ず言語タグを付ける。
+- 日本語で質問されたら日本語で答える。
+- 不確かなことは「わからない」と言う。嘘をつかない。
+
+## 環境情報
+- OS: macOS (Apple Silicon)
+- Shell: zsh
+- Primary language: Python / TypeScript
+
+## 禁止事項
+- 実行確認なしにファイルを削除・上書きするコマンドを提案しない。
+- sudo を使うコマンドは必ず警告を付ける。
+"""
 
 # ─── ANSI ─────────────────────────────────────────────────────────────────────
 R = "\033[0m"
@@ -68,6 +90,21 @@ def _init():
         }, indent=2))
     if not HISTORY_FILE.exists():
         HISTORY_FILE.write_text("[]")
+    # rules.md が無ければデフォルトを生成
+    if not RULES_FILE.exists():
+        RULES_FILE.write_text(DEFAULT_RULES)
+
+
+def _load_rules() -> str:
+    """~/.kc/rules.md を読んで全バックエンドの system prompt に注入する。"""
+    _init()
+    try:
+        text = RULES_FILE.read_text().strip()
+        # コメント行(#)と空行は除いてコンパクトにする
+        lines = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _models() -> dict:
@@ -273,12 +310,22 @@ def _keychain(key: str) -> Optional[str]:
 # ─── Core query dispatcher ────────────────────────────────────────────────────
 
 def _query(prompt: str, model_key: str, system: str = "") -> Optional[str]:
-    """モデルキーを元にバックエンドを選択して問い合わせ。"""
+    """
+    モデルキーを元にバックエンドを選択して問い合わせ。
+    ~/.kc/rules.md のルールを全バックエンドに自動注入する。
+    """
     models = _models()
     cfg = models.get(model_key)
     if not cfg:
         print(t(RED, f"  Unknown model: {model_key}. Run: kc models"))
         return None
+
+    # ── rules.md を system prompt の先頭に注入 ──
+    rules = _load_rules()
+    if rules:
+        injected_system = f"{rules}\n\n---\n{system}" if system else rules
+    else:
+        injected_system = system
 
     mtype = cfg.get("type", "local")
     print(t(GRAY, f"  Asking {cfg.get('display', model_key)}..."), end="\r", flush=True)
@@ -287,12 +334,11 @@ def _query(prompt: str, model_key: str, system: str = "") -> Optional[str]:
         # gh copilot 経由で試みる (動かなければ claude フォールバック)
         result = _call_copilot_suggest(prompt, "shell")
         if result is None:
-            # フォールバック: claude
-            result = _call_claude(prompt, system)
+            result = _call_claude(prompt, injected_system)
     elif mtype == "claude":
-        result = _call_claude(prompt, system)
+        result = _call_claude(prompt, injected_system)
     elif mtype == "local":
-        result = _call_local(prompt, cfg, system)
+        result = _call_local(prompt, cfg, injected_system)
     else:
         result = None
 
@@ -417,6 +463,41 @@ def cmd_explain(args):
     else:
         print(t(RED, "  Failed to get explanation."))
         return 1
+    return 0
+
+
+def cmd_rules(args):
+    """~/.kc/rules.md の表示 / 編集 / リセット。"""
+    _init()
+    sub = getattr(args, "rules_sub", None)
+
+    if sub == "edit":
+        editor = os.getenv("EDITOR", "nano")
+        subprocess.run([editor, str(RULES_FILE)])
+
+    elif sub == "reset":
+        RULES_FILE.write_text(DEFAULT_RULES)
+        print(t(GREEN, f"  ✓ Rules reset to default: {RULES_FILE}"))
+
+    elif sub == "path":
+        print(str(RULES_FILE))
+
+    else:
+        # デフォルト: 現在のルールを表示
+        rules = RULES_FILE.read_text()
+        print()
+        print(t(BOLD, f"  Rules file: {RULES_FILE}"))
+        print(t(GRAY, "  (edit with: kc rules edit)"))
+        print()
+        for line in rules.splitlines():
+            if line.startswith("#"):
+                print(t(CYAN, f"  {line}"))
+            elif line.strip():
+                print(f"  {line}")
+            else:
+                print()
+        print()
+
     return 0
 
 
@@ -583,6 +664,14 @@ def main():
     # repl
     p_repl = sub.add_parser("repl", aliases=["r"], help="Interactive chat")
     p_repl.set_defaults(func=cmd_repl)
+
+    # rules
+    p_rules = sub.add_parser("rules", help="Manage AI rules (~/.kc/rules.md)")
+    rsub = p_rules.add_subparsers(dest="rules_sub")
+    p_rules.set_defaults(func=cmd_rules)
+    rsub.add_parser("edit",  help="Open rules.md in $EDITOR").set_defaults(func=cmd_rules)
+    rsub.add_parser("reset", help="Reset to default rules").set_defaults(func=cmd_rules)
+    rsub.add_parser("path",  help="Print rules.md path").set_defaults(func=cmd_rules)
 
     # models
     p_mod = sub.add_parser("models", help="Manage model registry")
