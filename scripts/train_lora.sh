@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Ryota-Core LoRA Training Script
+# KIFT Model — Knowledge-Injected Fine-Tuned Local AI
 # Run on Mac Studio (M3 Ultra 512GB)
 #
 # Usage:
@@ -16,8 +16,11 @@ set -euo pipefail
 MODEL_NAME="mlx-community/Qwen3-Coder-Next-4bit"  # 80B MoE abliterated
 CORPUS_DIR="$HOME/lora-training"
 CORPUS_FILE="$CORPUS_DIR/corpus_text.jsonl" 
-ADAPTER_DIR="$CORPUS_DIR/adapters/ryota-core-v1"
-MERGED_DIR="$CORPUS_DIR/merged/ryota-core-v1"
+ADAPTER_DIR="$CORPUS_DIR/adapters/kift-v1"
+MERGED_DIR="$CORPUS_DIR/merged/kift-v1"
+
+# iCloud backup
+ICLOUD_BACKUP="$HOME/Library/Mobile Documents/com~apple~CloudDocs/KIFT-backup"
 
 # Training hyperparams
 BATCH_SIZE=2
@@ -29,13 +32,15 @@ VAL_BATCHES=25
 SAVE_EVERY=200
 
 echo "╔══════════════════════════════════════════╗"
-echo "║  Ryota-Core LoRA Training                ║"
+echo "║  🧬 KIFT Model — Training                ║"
+echo "║  Knowledge-Injected Fine-Tuned Local AI   ║"
 echo "╠══════════════════════════════════════════╣"
 echo "║  Model: $MODEL_NAME"
 echo "║  Corpus: $CORPUS_FILE"
 echo "║  Adapter: $ADAPTER_DIR"
 echo "║  Iters: $ITERS  Batch: $BATCH_SIZE"
 echo "║  LoRA Layers: $LORA_LAYERS  Rank: $LORA_RANK"
+echo "║  iCloud: $ICLOUD_BACKUP"
 echo "╚══════════════════════════════════════════╝"
 
 # ── Pre-flight ──
@@ -124,9 +129,21 @@ python3 -m mlx_lm.lora \
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
-echo "║  ✅ Training Complete!                    ║"
+echo "║  ✅ KIFT Training Complete!               ║"
 echo "║  Adapter: $ADAPTER_DIR                   ║"
 echo "╚══════════════════════════════════════════╝"
+
+# ── Step 2.5: Auto-backup to iCloud ──
+echo ""
+echo "▶ Step 2.5: Backing up to iCloud..."
+mkdir -p "$ICLOUD_BACKUP"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_NAME="kift-v1_${TIMESTAMP}"
+cp -r "$ADAPTER_DIR" "$ICLOUD_BACKUP/$BACKUP_NAME"
+cp "$CORPUS_FILE" "$ICLOUD_BACKUP/corpus_text.jsonl" 2>/dev/null || true
+echo "  ✅ Adapter backed up: $ICLOUD_BACKUP/$BACKUP_NAME"
+echo "  ✅ Corpus backed up: $ICLOUD_BACKUP/corpus_text.jsonl"
+echo "  📱 iCloud will sync automatically"
 
 # ── Step 3: Test ──
 echo ""
@@ -169,9 +186,12 @@ if [ "$merge" = "y" ]; then
 fi
 
 echo ""
-echo "Done. To serve (vLLM MLX):"
+echo "Done. To serve KIFT (vLLM MLX):"
 echo "  # Merged (recommended):"
-echo "  vllm serve $MERGED_DIR --device mlx --port 8102 --served-model-name ryota-core"
+echo "  vllm serve $MERGED_DIR --device mlx --port 8102 --served-model-name kift"
 echo ""
 echo "  # With adapter (no merge):"
 echo "  python3 -m mlx_lm.server --model $MODEL_NAME --adapter-path $ADAPTER_DIR --port 8102"
+echo ""
+echo "  # iCloud backup location:"
+echo "  $ICLOUD_BACKUP/"
