@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # ── Config ──
-MODEL_NAME="mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"  # Stable base
+MODEL_NAME="mlx-community/Qwen3-Coder-Next-4bit"  # 80B MoE abliterated
 CORPUS_DIR="$HOME/lora-training"
 CORPUS_FILE="$CORPUS_DIR/corpus_text.jsonl" 
 ADAPTER_DIR="$CORPUS_DIR/adapters/ryota-core-v1"
