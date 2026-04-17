@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# KIFT — Knowledge-Injected Fine-Tuned Model
-# (Qwen3 Coder Next Abliterated × Ryota-Core Corpus)
+# Qwen3 Coder Next KI蒸留 (Knowledge-Injected LoRA)
+# Qwen3 Coder Next Abliterated × Ryota-Core KI Corpus
 # Run on Mac Studio (M3 Ultra 512GB)
 #
 # Usage:
@@ -17,11 +17,11 @@ set -euo pipefail
 MODEL_NAME="mlx-community/Qwen3-Coder-Next-4bit"  # 80B MoE abliterated
 CORPUS_DIR="$HOME/lora-training"
 CORPUS_FILE="$CORPUS_DIR/corpus_text.jsonl" 
-ADAPTER_DIR="$CORPUS_DIR/adapters/kift-v1"
-MERGED_DIR="$CORPUS_DIR/merged/kift-v1"
+ADAPTER_DIR="$CORPUS_DIR/adapters/qwen3-ki-choryuu-v1"
+MERGED_DIR="$CORPUS_DIR/merged/qwen3-ki-choryuu-v1"
 
 # iCloud backup
-ICLOUD_BACKUP="$HOME/Library/Mobile Documents/com~apple~CloudDocs/KIFT-backup"
+ICLOUD_BACKUP="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Qwen3-KI蒸留"
 
 # Training hyperparams
 BATCH_SIZE=2
@@ -38,8 +38,8 @@ TIMEOUT_HOURS=10
 TIMEOUT_SECONDS=$((TIMEOUT_HOURS * 3600))
 
 echo "╔══════════════════════════════════════════╗"
-echo "║  🧬 KIFT Model — Training                ║"
-echo "║  Knowledge-Injected Fine-Tuned Local AI   ║"
+echo "║  🧠 Qwen3 Coder Next KI蒸留               ║"
+echo "║  Knowledge-Injected LoRA Fine-Tuning     ║"
 echo "╠══════════════════════════════════════════╣"
 echo "║  Model: $MODEL_NAME"
 echo "║  Corpus: $CORPUS_FILE"
@@ -156,21 +156,33 @@ fi
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
-echo "║  ✅ KIFT Training Complete!               ║"
+echo "║  ✅ Qwen3 KI蒸留 Training Complete!       ║"
 echo "║  Adapter: $ADAPTER_DIR                   ║"
 echo "╚══════════════════════════════════════════╝"
 
-# ── Step 2.5: Auto-backup to iCloud ──
+# ── Step 2.5: Auto-backup to iCloud + フォルダ保護 ──
 echo ""
 echo "▶ Step 2.5: Backing up to iCloud..."
 mkdir -p "$ICLOUD_BACKUP"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_NAME="kift-v1_${TIMESTAMP}"
+BACKUP_NAME="qwen3-ki-choryuu-v1_${TIMESTAMP}"
 cp -r "$ADAPTER_DIR" "$ICLOUD_BACKUP/$BACKUP_NAME"
 cp "$CORPUS_FILE" "$ICLOUD_BACKUP/corpus_text.jsonl" 2>/dev/null || true
 echo "  ✅ Adapter backed up: $ICLOUD_BACKUP/$BACKUP_NAME"
 echo "  ✅ Corpus backed up: $ICLOUD_BACKUP/corpus_text.jsonl"
 echo "  📱 iCloud will sync automatically"
+
+# ── フォルダ保護: chflags uchg — Finder・ターミナルからの誤删除を封じる ──
+echo ""
+echo "▶ Step 2.6: Protecting output folders from accidental deletion..."
+# ローカルの adapter フォルダをロック
+chflags -R uchg "$ADAPTER_DIR" && echo "  🔒 $ADAPTER_DIR locked" || echo "  ⚠️  Could not lock $ADAPTER_DIR"
+# iCloudバックアップ先もロック
+chflags -R uchg "$ICLOUD_BACKUP/$BACKUP_NAME" && echo "  🔒 $ICLOUD_BACKUP/$BACKUP_NAME locked" || echo "  ⚠️  Could not lock iCloud backup"
+echo ""
+echo "  ⚠️  NOTE: To DELETE later, first run:"
+echo "    chflags -R nouchg $ADAPTER_DIR"
+echo "    chflags -R nouchg \"$ICLOUD_BACKUP/$BACKUP_NAME\""
 
 # ── Step 3: Test ──
 echo ""
@@ -213,12 +225,16 @@ if [ "$merge" = "y" ]; then
 fi
 
 echo ""
-echo "Done. To serve KIFT (vLLM MLX):"
+echo "Done. To serve Qwen3 KI蒸留 (vLLM MLX):"
 echo "  # Merged (recommended):"
-echo "  vllm serve $MERGED_DIR --device mlx --port 8102 --served-model-name kift"
+echo "  vllm serve $MERGED_DIR --device mlx --port 8102 --served-model-name qwen3-ki-choryuu"
 echo ""
 echo "  # With adapter (no merge):"
 echo "  python3 -m mlx_lm.server --model $MODEL_NAME --adapter-path $ADAPTER_DIR --port 8102"
 echo ""
 echo "  # iCloud backup location:"
 echo "  $ICLOUD_BACKUP/"
+echo ""
+echo "  # To unlock folders if you need to delete:"
+echo "  chflags -R nouchg $ADAPTER_DIR"
+echo "  chflags -R nouchg \"$ICLOUD_BACKUP\""
