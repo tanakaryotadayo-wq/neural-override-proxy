@@ -20,7 +20,6 @@ BRAIN_BASE = os.path.expanduser("~/.gemini/antigravity/brain")
 
 def rebuild_overview(conv_dir: str) -> int:
     """Rebuild overview.txt from steps/ and messages/ data."""
-    conv_id = os.path.basename(conv_dir.rstrip("/"))
     steps_dir = os.path.join(conv_dir, ".system_generated", "steps")
     messages_dir = os.path.join(conv_dir, ".system_generated", "messages")
     logs_dir = os.path.join(conv_dir, ".system_generated", "logs")

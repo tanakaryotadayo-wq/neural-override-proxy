@@ -102,7 +102,7 @@ def _load_rules() -> str:
     try:
         text = RULES_FILE.read_text().strip()
         # コメント行(#)と空行は除いてコンパクトにする
-        lines = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
+        lines = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
         return "\n".join(lines)
     except Exception:
         return ""
@@ -154,7 +154,7 @@ def _header(model_display: str):
 def _show_suggestion(suggestion: str, target: str = "shell"):
     """gh copilot suggest のコマンド表示ボックス"""
     lines = suggestion.strip().splitlines()
-    width = max(len(l) for l in lines) + 4
+    width = max(len(line) for line in lines) + 4
     sep = "─" * width
     print()
     print(t(GRAY, f"  {sep}"))
@@ -557,7 +557,7 @@ def cmd_explain(args):
     display = models.get(model_key, {}).get("display", model_key)
 
     _header(display)
-    print(t(BOLD, f"  Explaining: ") + t(CYAN, command))
+    print(t(BOLD, "  Explaining: ") + t(CYAN, command))
 
     system = (
         "Explain the shell command clearly. Cover: what it does, each flag/argument, "

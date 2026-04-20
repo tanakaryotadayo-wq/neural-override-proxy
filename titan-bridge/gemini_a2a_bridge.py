@@ -17,8 +17,10 @@ pretending multimodal support exists.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
@@ -27,6 +29,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +37,22 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
+
+_pipeline_log = logging.getLogger("pipeline")
+
+# ─── Memory pipeline (extracted module) ─────────────────────────────────────
+try:
+    from memory_pipeline import emit_fleet_log as _emit_fleet_log, try_recall as _try_recall
+except ImportError:
+    # Fallback: resolve from same directory
+    import importlib.util as _mp_ilu
+    _mp_spec = _mp_ilu.spec_from_file_location(
+        "memory_pipeline", str(Path(__file__).parent / "memory_pipeline.py")
+    )
+    _mp_mod = _mp_ilu.module_from_spec(_mp_spec)
+    _mp_spec.loader.exec_module(_mp_mod)  # type: ignore[union-attr]
+    _emit_fleet_log = _mp_mod.emit_fleet_log
+    _try_recall = _mp_mod.try_recall
 
 
 JSON_CONTENT_TYPE = "application/json"
@@ -498,11 +517,13 @@ def build_newgate_context(profile: Dict[str, Any], focus: str, user_prompt: str)
         "validatedFacts": profile.get("validatedFacts"),
         "focus": focus,
     }
+    recall_block = _try_recall(user_prompt)
     return (
         "[Newgate Context]\n"
         "Treat the following as the current architecture snapshot and operating assumptions.\n"
         f"{json.dumps(summary, ensure_ascii=False, indent=2)}\n"
         "---\n"
+        f"{recall_block}"
         "[User Request]\n"
         f"{user_prompt}"
     )
@@ -1666,7 +1687,16 @@ class LocalGeminiA2ABridge:
                 task.updated_at = now_iso()
                 task.last_error = None
                 task.status_message = reply_message
-                return task.snapshot(self)
+                user_text = flatten_parts(history[-1].get("parts", [])) if history else ""
+                snapshot = task.snapshot(self)
+
+            # Auto fleet_log (outside lock, fire-and-forget thread)
+            threading.Thread(
+                target=_emit_fleet_log,
+                args=("success", user_text[:400], reply_text[:800], task.route_id),
+                daemon=True,
+            ).start()
+            return snapshot
         except BackendError as error:
             with self._lock:
                 task = self.tasks[task_id]
@@ -1682,7 +1712,15 @@ class LocalGeminiA2ABridge:
                     {"routeId": task.route_id},
                 )
                 task.history.append(task.status_message)
-                return task.snapshot(self)
+                user_text = flatten_parts(history[-1].get("parts", [])) if history else ""
+                snapshot = task.snapshot(self)
+
+            threading.Thread(
+                target=_emit_fleet_log,
+                args=("failure", user_text[:400], str(error)[:800], task.route_id),
+                daemon=True,
+            ).start()
+            return snapshot
 
     def _build_openai_messages(self, route: RouteConfig, history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         messages = [{"role": "system", "content": route.system_prompt}]

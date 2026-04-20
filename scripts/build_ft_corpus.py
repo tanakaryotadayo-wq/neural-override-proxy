@@ -14,7 +14,6 @@ import glob
 import json
 import os
 import sys
-from pathlib import Path
 
 # Sources to collect
 KI_BASE = os.path.expanduser("~/.gemini/antigravity/knowledge")
