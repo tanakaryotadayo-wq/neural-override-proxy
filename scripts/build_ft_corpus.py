@@ -25,7 +25,10 @@ BRAIN_BASE = os.path.expanduser("~/.gemini/antigravity/brain")
 
 # File extensions to include
 CODE_EXTENSIONS = {".py", ".ts", ".js", ".json", ".md", ".sh", ".yaml", ".yml"}
-SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build"}
+SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv",
+             "venv", ".venv-embed", "site-packages",
+             "dist", "build", ".eggs", ".tox", ".mypy_cache",
+             ".pytest_cache", ".ruff_cache"}
 MAX_FILE_SIZE = 100_000  # 100KB max per file
 
 
