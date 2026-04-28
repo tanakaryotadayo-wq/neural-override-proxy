@@ -96,7 +96,8 @@ def collect_code_files() -> list[dict]:
         repo_name = os.path.basename(code_dir)
         for root, dirs, files in os.walk(code_dir):
             # Skip unwanted directories
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS
+                       and not d.startswith(".venv")]
 
             for fname in sorted(files):
                 ext = os.path.splitext(fname)[1].lower()
